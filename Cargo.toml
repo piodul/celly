@@ -6,3 +6,6 @@ authors = ["PhazzaT <piodul@op.pl>"]
 [dependencies]
 image = "*"
 rayon = "*"
+
+[profile.release]
+debug = true
