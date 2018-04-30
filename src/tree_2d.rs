@@ -3,6 +3,8 @@ use float_ord::FloatOrd;
 pub type Coord = f64;
 pub type Point2D = (Coord, Coord);
 
+const SWITCH_TO_LINEAR: u32 = 12;
+
 pub trait NearestNeighbor2D {
     fn new_from_points(points: Vec<Point2D>) -> Self;
     fn find_closest(&self, point: Point2D) -> (u32, usize);
@@ -37,8 +39,17 @@ fn partition_slice<T, F>(slice: &mut [T], f: F) where F: Fn(&T) -> bool {
 
 impl Tree2D {
     fn new_inner_from_points(&mut self, depth: u32, points: &mut [Point2D]) -> u32 {
-        if points.is_empty() {
-            return 0;
+        let idx = self.nodes.len() as u32;
+
+        if points.len() <= SWITCH_TO_LINEAR as usize {
+            for pt in points.iter() {
+                self.nodes.push(Tree2DNode {
+                    point: *pt,
+                    left: 0,
+                    right: 0,
+                })
+            }
+            return idx;
         }
 
         if depth % 2 == 0 {
@@ -51,7 +62,6 @@ impl Tree2D {
         let median_index = points.len() / 2;
         let plen = points.len();
 
-        let idx = self.nodes.len() as u32;
         self.nodes.push(Tree2DNode {
             point: points[median_index],
             left: 0,
@@ -60,35 +70,46 @@ impl Tree2D {
 
         self.nodes[idx as usize].left = self.new_inner_from_points(depth + 1, &mut points[0..median_index]);
         self.nodes[idx as usize].right = self.new_inner_from_points(depth + 1, &mut points[median_index + 1..plen]);
-        idx + 1
+        idx
     }
 
-    fn find_closest_inner(&self, closest: &mut (u32, Coord), depth: u32, idx: u32, pt: Point2D) -> usize {
-        if idx == 0 {
-            return 0;
+    fn find_closest_inner(&self, closest: &mut (u32, Coord), depth: u32, curr_range: u32, idx: u32, pt: Point2D) -> usize {
+        if curr_range <= SWITCH_TO_LINEAR {
+            for (id, node) in self.nodes[idx as usize..(idx + curr_range) as usize].iter().enumerate() {
+                let new_distance = distance_squared(pt, node.point);
+                if closest.1 > new_distance {
+                    closest.0 = idx + id as u32;
+                    closest.1 = new_distance;
+                }
+            }
+
+            return curr_range as usize;
         }
 
-        let node = &self.nodes[idx as usize - 1];
+        let node = &self.nodes[idx as usize];
         let new_distance = distance_squared(pt, node.point);
         if closest.1 > new_distance {
-            closest.0 = idx - 1;
+            closest.0 = idx;
             closest.1 = new_distance;
         }
 
+        let left_len = curr_range / 2;
+        let right_len = curr_range - (curr_range / 2) - 1;
+
         let is_even = depth % 2 == 0;
-        let (first_node, next_node) = if (is_even && pt.0 < node.point.0) || (!is_even && pt.1 < node.point.1) {
-            (node.left, node.right)
+        let (first_node, first_len, next_node, next_len) = if (is_even && pt.0 < node.point.0) || (!is_even && pt.1 < node.point.1) {
+            (node.left, left_len, node.right, right_len)
         }
         else {
-            (node.right, node.left)
+            (node.right, right_len, node.left, left_len)
         };
 
         let mut visited_count = 1;
-        visited_count += self.find_closest_inner(closest, depth + 1, first_node, pt);
+        visited_count += self.find_closest_inner(closest, depth + 1, first_len, first_node, pt);
 
         let distance = if is_even { pt.0 - node.point.0 } else { pt.1 - node.point.1 };
         if distance * distance < closest.1 {
-            visited_count += self.find_closest_inner(closest, depth + 1, next_node, pt);
+            visited_count += self.find_closest_inner(closest, depth + 1, next_len, next_node, pt);
         }
 
         visited_count
@@ -108,7 +129,7 @@ impl NearestNeighbor2D for Tree2D {
 
     fn find_closest(&self, point: Point2D) -> (u32, usize) {
         let mut p = (0, distance_squared(point, self.nodes[0].point));
-        let cnt = self.find_closest_inner(&mut p, 0, 1, point);
+        let cnt = self.find_closest_inner(&mut p, 0, self.nodes.len() as u32, 0, point);
         (p.0, cnt)
     }
 

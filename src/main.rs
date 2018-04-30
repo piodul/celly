@@ -11,6 +11,7 @@ use std::path::Path;
 use std::ffi::OsString;
 use std::time::{Instant, Duration};
 use image::Pixel;
+use rayon::prelude::*;
 use float_ord::FloatOrd;
 
 use tree_2d::{Point2D, Tree2D, Coord, NearestNeighbor2D, StupidFind};
@@ -85,91 +86,28 @@ fn compute_differential_image(img: &image::RgbImage) -> Vec<Coord> {
     ret2
 }
 
-fn migrate_points(
-    img: &image::RgbImage,
-    differential: &Vec<Coord>,
-    mut points: Vec<Point2D>,
-    width: u32,
-    height: u32,
-    max_iters: u32,
-) -> Vec<Point2D> {
-    // println!("{:?}", points);
-    let mut point_weights = Vec::with_capacity(points.len());
-
-    let mut niters = 0;
-
-    let mut previous_diff = 1.0;
-    while previous_diff > 0.0 && niters < max_iters {
-        point_weights.clear();
-        point_weights.resize(points.len(), ((0.0, 0.0), 0.0));
-
-        let mut tree = Tree2D::new_from_points(points.clone());
-
-        let mut idx = 0;
-        let mut fy = 0.5;
-        for _ in 0..height {
-            let mut fx = 0.5;
-            for _ in 0..width {
-                let (closest_idx, _) = tree.find_closest((fx, fy));
-                let weight = differential[idx];
-                (point_weights[closest_idx as usize].0).0 += fx * weight;
-                (point_weights[closest_idx as usize].0).1 += fy * weight;
-                point_weights[closest_idx as usize].1 += weight;
-
-                fx += 1.0;
-                idx += 1;
-            }
-            fy += 1.0;
-        }
-
-        previous_diff = 0.0;
-        let mut new_points = Vec::new();
-        for (id, (pt, w)) in point_weights.iter().enumerate() {
-            if *w > 0.0 {
-                let ptx = pt.0 / w;
-                let pty = pt.1 / w;
-                new_points.push((ptx, pty));
-                let oldpt = points[id];
-                let d = (oldpt.0 - ptx).abs() + (oldpt.1 - pty).abs();
-                if previous_diff < d {
-                    previous_diff = d;
-                }
-            }
-        }
-
-        // let mut celly = img.clone();
-        // generate_celly_image(&mut celly, new_points.clone());
-        // let new_path = format!("/tmp/cell-{:04}.png", niters);
-        // celly.save(OsString::from(new_path)).unwrap();
-        niters += 1;
-
-        std::mem::swap(&mut points, &mut new_points);
-
-        println!("Previous diff: {}, points remaining: {}", previous_diff, points.len());
-    }
-
-    points
-}
-
-fn generate_celly_image<T: NearestNeighbor2D>(img: &mut image::RgbImage, points: Vec<Point2D>) {
-    let mut total_visited_nodes = 0;
-    let mut total_lookups = 0;
-
-    let mut acc_colors = vec![(0.0, 0.0, 0.0, 0); points.len()];
-    let mut tree = T::new_from_points(points);
+fn generate_celly_image<T: NearestNeighbor2D + Sync>(img: &mut image::RgbImage, points: Vec<Point2D>) {
+    let pt1 = Instant::now();
+    let plen = points.len();
+    let tree = T::new_from_points(points);
+    let mut acc_colors = vec![(0.0, 0.0, 0.0, 0); plen];
     let mut fy = 0.5;
+
+    let mut idx_cache = Vec::with_capacity((img.width() * img.height()) as usize);
+
     for y in 0..img.height() {
+
         let mut fx = 0.5;
         for x in 0..img.width() {
             let px = img.get_pixel(x, y);
             let (closest_idx, cnt) = tree.find_closest((fx, fy));
             let acc = &mut acc_colors[closest_idx as usize];
-            total_visited_nodes += cnt;
-            total_lookups += 1;
             acc.0 += px.data[0] as Coord;
             acc.1 += px.data[1] as Coord;
             acc.2 += px.data[2] as Coord;
             acc.3 += 1;
+
+            idx_cache.push(closest_idx);
 
             fx += 1.0;
         }
@@ -183,11 +121,16 @@ fn generate_celly_image<T: NearestNeighbor2D>(img: &mut image::RgbImage, points:
         acc.2 *= recip;
     }
 
+    let pt2 = Instant::now();
+
     fy = 0.5;
+    let mut pix_id = 0;
     for y in 0..img.height() {
         let mut fx = 0.5;
         for x in 0..img.width() {
-            let closest_idx = tree.find_closest((fx, fy)).0;
+            let closest_idx = idx_cache[pix_id];
+            pix_id += 1;
+            // let closest_idx = tree.find_closest((fx, fy)).0;
             let acc = &acc_colors[closest_idx as usize];
             img.put_pixel(x, y, image::Rgb {
                 data: [acc.0 as u8, acc.1 as u8, acc.2 as u8]
@@ -198,8 +141,12 @@ fn generate_celly_image<T: NearestNeighbor2D>(img: &mut image::RgbImage, points:
         fy += 1.0;
     }
 
-    let wastefulness = (total_visited_nodes as f64 / (total_lookups as f64 * acc_colors.len() as f64));
-    println!("Wastefulness: {}", wastefulness);
+    let pt3 = Instant::now();
+    println!("    Collecting sums took {}s", duration_as_seconds(pt2 - pt1));
+    println!("    Setting colors took {}s", duration_as_seconds(pt3 - pt2));
+
+    // let wastefulness = total_visited_nodes as f64 / (total_lookups as f64 * acc_colors.len() as f64);
+    // println!("Wastefulness: {}", wastefulness);
 }
 
 // fn draw_distribution(points: &Vec<Point2D>) -> image::RgbImage {
