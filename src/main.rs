@@ -43,46 +43,47 @@ fn generate_initial_points(diff_img: &Vec<Coord>, n: usize, width: u32, height: 
 }
 
 fn compute_differential_image(img: &image::RgbImage) -> Vec<Coord> {
-    let mut ret = Vec::with_capacity((img.width() * img.height()) as usize);
-    for y in 0..img.height() {
-        for x in 0..img.width() {
-            let mut diff_x = 0.0;
-            let mut diff_y = 0.0;
-            let luma = convert_to_luma(img.get_pixel(x, y));
-            if x < img.width() - 1 {
-                diff_x += (convert_to_luma(img.get_pixel(x + 1, y)) - luma).abs();
-            }
-            if y < img.height() - 1 {
-                diff_y += (convert_to_luma(img.get_pixel(x, y + 1)) - luma).abs();
-            }
-            if x > 0 {
-                diff_x += (luma - convert_to_luma(img.get_pixel(x - 1, y))).abs();
-            }
-            if y > 0 {
-                diff_y += (luma - convert_to_luma(img.get_pixel(x, y - 1))).abs();
-            }
-            let v = diff_x * diff_x + diff_y * diff_y;
-            ret.push(v);
+    let mut ret = vec![0.0; (img.width() * img.height()) as usize];
+    ret.par_iter_mut().enumerate().for_each(|(id, cell)| {
+        let x = id as u32 % img.width();
+        let y = id as u32 / img.width();
+        let mut diff_x = 0.0;
+        let mut diff_y = 0.0;
+        let luma = convert_to_luma(img.get_pixel(x, y));
+        if x < img.width() - 1 {
+            diff_x += (convert_to_luma(img.get_pixel(x + 1, y)) - luma).abs();
         }
-    }
+        if y < img.height() - 1 {
+            diff_y += (convert_to_luma(img.get_pixel(x, y + 1)) - luma).abs();
+        }
+        if x > 0 {
+            diff_x += (luma - convert_to_luma(img.get_pixel(x - 1, y))).abs();
+        }
+        if y > 0 {
+            diff_y += (luma - convert_to_luma(img.get_pixel(x, y - 1))).abs();
+        }
+        *cell = diff_x * diff_x + diff_y * diff_y;
+    });
 
     // Blur the image
     const BLUR_RADIUS: i32 = 5;
-    let mut ret2 = Vec::with_capacity((img.width() * img.height()) as usize);
-    for y in 0..img.height() as i32 {
-        for x in 0..img.width() as i32 {
-            let mut acc = 0.0;
-            for by in -BLUR_RADIUS..BLUR_RADIUS + 1 {
-                let oy = cmp::max(0, cmp::min(img.height() as i32 - 1, y + by));
-                for bx in -BLUR_RADIUS..BLUR_RADIUS + 1 {
-                    let ox = cmp::max(0, cmp::min(img.width() as i32 - 1, x + bx));
-                    let idx = oy as u32 * img.width() + ox as u32;
-                    acc += ret[idx as usize];
-                }
+    // let mut ret2 = Vec::with_capacity((img.width() * img.height()) as usize);
+    let mut ret2 = vec![0.0; (img.width() * img.height()) as usize];
+    ret2.par_iter_mut().enumerate().for_each(|(id, cell)| {
+        let x = id as i32 % img.width() as i32;
+        let y = id as i32 / img.width() as i32;
+        let mut acc = 0.0;
+        for by in -BLUR_RADIUS..BLUR_RADIUS + 1 {
+            let oy = cmp::max(0, cmp::min(img.height() as i32 - 1, y + by));
+            for bx in -BLUR_RADIUS..BLUR_RADIUS + 1 {
+                let ox = cmp::max(0, cmp::min(img.width() as i32 - 1, x + bx));
+                let idx = oy as u32 * img.width() + ox as u32;
+                acc += ret[idx as usize];
             }
-            ret2.push(acc);
         }
-    }
+        *cell = acc;
+    });
+
     ret2
 }
 
@@ -96,7 +97,6 @@ fn generate_celly_image<T: NearestNeighbor2D + Sync>(img: &mut image::RgbImage, 
     let mut idx_cache = Vec::with_capacity((img.width() * img.height()) as usize);
 
     for y in 0..img.height() {
-
         let mut fx = 0.5;
         for x in 0..img.width() {
             let px = img.get_pixel(x, y);
