@@ -65,30 +65,33 @@ fn compute_differential_image(img: &image::RgbImage) -> Vec<Coord> {
         *cell = diff_x * diff_x + diff_y * diff_y;
     });
 
+    let im_width = img.width();
+    let im_height = img.height();
+
     // Blur the image
     const BLUR_RADIUS: i32 = 5;
-    // let mut ret2 = Vec::with_capacity((img.width() * img.height()) as usize);
-    let mut ret2 = vec![0.0; (img.width() * img.height()) as usize];
+    // let mut ret2 = Vec::with_capacity((im_width * im_height) as usize);
+    let mut ret2 = vec![0.0; (im_width * im_height) as usize];
     ret2.par_iter_mut().enumerate().for_each(|(id, cell)| {
-        let x = id as i32 % img.width() as i32;
-        let y = id as i32 / img.width() as i32;
+        let x = id as i32 % im_width as i32;
+        let y = id as i32 / im_width as i32;
         let mut acc = 0.0;
         for by in -BLUR_RADIUS..BLUR_RADIUS + 1 {
-            let oy = cmp::max(0, cmp::min(img.height() as i32 - 1, y + by));
-            let idx = oy as u32 * img.width() + x as u32;
+            let oy = cmp::max(0, cmp::min(im_height as i32 - 1, y + by));
+            let idx = oy as u32 * im_width + x as u32;
             acc += ret[idx as usize];
         }
         *cell = acc;
     });
 
-    let mut ret3 = vec![0.0; (img.width() * img.height()) as usize];
+    let mut ret3 = vec![0.0; (im_width * im_height) as usize];
     ret3.par_iter_mut().enumerate().for_each(|(id, cell)| {
-        let x = id as i32 % img.width() as i32;
-        let y = id as i32 / img.width() as i32;
+        let x = id as i32 % im_width as i32;
+        let y = id as i32 / im_width as i32;
         let mut acc = 0.0;
         for bx in -BLUR_RADIUS..BLUR_RADIUS + 1 {
-            let ox = cmp::max(0, cmp::min(img.width() as i32 - 1, x + bx));
-            let idx = y as u32 * img.width() + ox as u32;
+            let ox = cmp::max(0, cmp::min(im_width as i32 - 1, x + bx));
+            let idx = y as u32 * im_width + ox as u32;
             acc += ret2[idx as usize];
         }
         *cell = acc;
@@ -104,24 +107,34 @@ fn generate_celly_image<T: NearestNeighbor2D + Sync>(img: &mut image::RgbImage, 
     let mut acc_colors = vec![(0.0, 0.0, 0.0, 0); plen];
     let mut fy = 0.5;
 
-    let mut idx_cache = Vec::with_capacity((img.width() * img.height()) as usize);
+    let im_width = img.width();
+    let im_height = img.height();
 
-    for y in 0..img.height() {
-        let mut fx = 0.5;
-        for x in 0..img.width() {
+    // let mut idx_cache = Vec::with_capacity((img.width() * img.height()) as usize);
+    let mut idx_cache = vec![0; (im_width * im_height) as usize];
+    idx_cache.par_iter_mut().enumerate().for_each(|(id, cell)| {
+        let x = id as i32 % im_width as i32;
+        let y = id as i32 / im_width as i32;
+        let fx = x as f64 + 0.5;
+        let fy = y as f64 + 0.5;
+        let (closest_idx, cnt) = tree.find_closest((fx, fy));
+        *cell = closest_idx;
+    });
+
+    let mut pix_id = 0;
+    for y in 0..im_height {
+        for x in 0..im_width {
             let px = img.get_pixel(x, y);
-            let (closest_idx, cnt) = tree.find_closest((fx, fy));
+            // let (closest_idx, cnt) = tree.find_closest((fx, fy));
+            let closest_idx = idx_cache[pix_id];
             let acc = &mut acc_colors[closest_idx as usize];
             acc.0 += px.data[0] as Coord;
             acc.1 += px.data[1] as Coord;
             acc.2 += px.data[2] as Coord;
             acc.3 += 1;
 
-            idx_cache.push(closest_idx);
-
-            fx += 1.0;
+            pix_id += 1;
         }
-        fy += 1.0;
     }
 
     for acc in acc_colors.iter_mut() {
@@ -135,9 +148,9 @@ fn generate_celly_image<T: NearestNeighbor2D + Sync>(img: &mut image::RgbImage, 
 
     fy = 0.5;
     let mut pix_id = 0;
-    for y in 0..img.height() {
+    for y in 0..im_height {
         let mut fx = 0.5;
-        for x in 0..img.width() {
+        for x in 0..im_width {
             let closest_idx = idx_cache[pix_id];
             pix_id += 1;
             // let closest_idx = tree.find_closest((fx, fy)).0;
