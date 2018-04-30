@@ -75,16 +75,26 @@ fn compute_differential_image(img: &image::RgbImage) -> Vec<Coord> {
         let mut acc = 0.0;
         for by in -BLUR_RADIUS..BLUR_RADIUS + 1 {
             let oy = cmp::max(0, cmp::min(img.height() as i32 - 1, y + by));
-            for bx in -BLUR_RADIUS..BLUR_RADIUS + 1 {
-                let ox = cmp::max(0, cmp::min(img.width() as i32 - 1, x + bx));
-                let idx = oy as u32 * img.width() + ox as u32;
-                acc += ret[idx as usize];
-            }
+            let idx = oy as u32 * img.width() + x as u32;
+            acc += ret[idx as usize];
         }
         *cell = acc;
     });
 
-    ret2
+    let mut ret3 = vec![0.0; (img.width() * img.height()) as usize];
+    ret3.par_iter_mut().enumerate().for_each(|(id, cell)| {
+        let x = id as i32 % img.width() as i32;
+        let y = id as i32 / img.width() as i32;
+        let mut acc = 0.0;
+        for bx in -BLUR_RADIUS..BLUR_RADIUS + 1 {
+            let ox = cmp::max(0, cmp::min(img.width() as i32 - 1, x + bx));
+            let idx = y as u32 * img.width() + ox as u32;
+            acc += ret2[idx as usize];
+        }
+        *cell = acc;
+    });
+
+    ret3
 }
 
 fn generate_celly_image<T: NearestNeighbor2D + Sync>(img: &mut image::RgbImage, points: Vec<Point2D>) {
