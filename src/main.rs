@@ -4,6 +4,7 @@ extern crate rayon;
 mod float_ord;
 mod tree_2d;
 mod halton;
+mod delaunay;
 
 use std::env::args_os;
 use std::cmp;
@@ -180,35 +181,52 @@ fn duration_as_seconds(d: Duration) -> f64 {
     d.as_secs() as f64 + d.subsec_micros() as f64 / 1e6
 }
 
+struct Timer {
+    last_timestamp: Instant,
+}
+
+impl Timer {
+    fn new() -> Timer {
+        Timer {
+            last_timestamp: Instant::now(),
+        }
+    }
+
+    fn measure(&mut self, msg: &str) {
+        let new_timestamp = Instant::now();
+        let seconds = duration_as_seconds(new_timestamp - self.last_timestamp);
+        println!("[TIMER] ({}) took {}s", msg, seconds);
+        self.last_timestamp = new_timestamp;
+    }
+}
+
 fn main() {
     let mut args = args_os();
     args.next();
     let path = args.next().unwrap();
     let fineness = args.next().unwrap().to_string_lossy().parse::<u32>().unwrap();
 
-    let tpt1 = Instant::now();
+    let mut timer = Timer::new();
     let mut img = image::open(&Path::new(&path)).unwrap().to_rgb();
     let point_count = ((img.width() * img.height()) / fineness) as usize;
 
-    let tpt2 = Instant::now();
     println!("Point count: {}", point_count);
-    println!("  Opening took {}s", duration_as_seconds(tpt2 - tpt1));
+    timer.measure("Opening image file");
+
     let diff_img = compute_differential_image(&img);
+    timer.measure("Computing difference");
 
-    let tpt3 = Instant::now();
-    println!("  Computing difference took {}s", duration_as_seconds(tpt3 - tpt2));
     let initial_points = generate_initial_points(&diff_img, point_count, img.width(), img.height());
+    timer.measure("Generating initial points");
+
     // let points = migrate_points(&img, &diff_img, initial_points, img.width(), img.height(), 10);
+    delaunay::triangulate(&initial_points, (0.0, 0.0), (1920.0, 1080.0));
+    timer.measure("Calculating delaunay triangulation");
 
-    let tpt4 = Instant::now();
-    println!("  Generating initial points took {}s", duration_as_seconds(tpt4 - tpt3));
     generate_celly_image::<Tree2D>(&mut img, initial_points);
+    timer.measure("Generating celly image");
 
-    let tpt5 = Instant::now();
-    println!("  Generating celly image took {}s", duration_as_seconds(tpt5 - tpt4));
     let new_path = String::from(path.to_string_lossy()) + ".cellied.png";
     img.save(OsString::from(new_path)).unwrap();
-
-    let tpt6 = Instant::now();
-    println!("  Saving took {}s", duration_as_seconds(tpt6 - tpt5));
+    timer.measure("Saving");
 }
