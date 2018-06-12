@@ -5,6 +5,8 @@ mod float_ord;
 mod tree_2d;
 mod halton;
 mod delaunay;
+mod rasterization;
+mod common_geometry;
 
 use std::env::args_os;
 use std::cmp;
@@ -14,6 +16,7 @@ use std::time::{Instant, Duration};
 use image::Pixel;
 use rayon::prelude::*;
 use float_ord::FloatOrd;
+use common_geometry::Triangle2D;
 
 use tree_2d::{Point2D, Tree2D, Coord, NearestNeighbor2D, StupidFind};
 use halton::HaltonSequence;
@@ -173,6 +176,69 @@ fn generate_celly_image<T: NearestNeighbor2D + Sync>(img: &mut image::RgbImage, 
     // println!("Wastefulness: {}", wastefulness);
 }
 
+fn generate_delaunay_image(
+    img: &mut image::RgbImage,
+    triangulation: &Vec<Triangle2D>,
+) {
+    let events = rasterization::prepare_events(triangulation);
+    let mut tri_stats = Vec::with_capacity(triangulation.len());
+    {
+        let mut pixel_id = 0;
+
+        tri_stats.resize(triangulation.len(), ((0.0, 0.0, 0.0), 0));
+        let gather_pixel = |
+            x: u32, y: u32,
+            tri_id: Option<usize>,
+        | {
+            match tri_id {
+                Some(id) => {
+                    let pix = img.get_pixel(x, y);
+                    let tstats = &mut tri_stats[id];
+                    (tstats.0).0 += pix.data[0] as Coord;
+                    (tstats.0).1 += pix.data[1] as Coord;
+                    (tstats.0).2 += pix.data[2] as Coord;
+                    tstats.1 += 1;
+                },
+                None => {},
+            }
+        };
+
+        rasterization::rasterize(&events, 1920, 1080, gather_pixel);
+    }
+
+    for tstat in tri_stats.iter_mut() {
+        (tstat.0).0 /= tstat.1 as Coord;
+        (tstat.0).1 /= tstat.1 as Coord;
+        (tstat.0).2 /= tstat.1 as Coord;
+    }
+
+    {
+        let mut pixel_id = 0;
+        let mut set_pixel = |
+            x: u32, y: u32,
+            tri_id: Option<usize>,
+        | {
+            let pixel = match tri_id {
+                Some(id) => {
+                    let tstat = tri_stats[id];
+                    image::Rgb {
+                        data: [
+                            (tstat.0).0 as u8,
+                            (tstat.0).1 as u8,
+                            (tstat.0).2 as u8,
+                        ]
+                    }
+                }
+                None => image::Rgb { data: [0; 3] },
+            };
+            img.put_pixel(x, y, pixel);
+            pixel_id += 1;
+        };
+
+        rasterization::rasterize(&events, 1920, 1080, set_pixel);
+    }
+}
+
 // fn draw_distribution(points: &Vec<Point2D>) -> image::RgbImage {
 //     let mut img =
 // }
@@ -220,11 +286,18 @@ fn main() {
     timer.measure("Generating initial points");
 
     // let points = migrate_points(&img, &diff_img, initial_points, img.width(), img.height(), 10);
-    delaunay::triangulate(&initial_points, (0.0, 0.0), (1920.0, 1080.0));
+    let tris = delaunay::triangulate(
+        &initial_points,
+        (0.0, 0.0),
+        (1920.0, 1080.0)
+    );
     timer.measure("Calculating delaunay triangulation");
 
-    generate_celly_image::<Tree2D>(&mut img, initial_points);
-    timer.measure("Generating celly image");
+    generate_delaunay_image(&mut img, &tris);
+    timer.measure("Generating delaunay image");
+
+    // generate_celly_image::<Tree2D>(&mut img, initial_points);
+    // timer.measure("Generating celly image");
 
     let new_path = String::from(path.to_string_lossy()) + ".cellied.png";
     img.save(OsString::from(new_path)).unwrap();
