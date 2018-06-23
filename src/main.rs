@@ -180,6 +180,8 @@ fn generate_delaunay_image(
     img: &mut image::RgbImage,
     triangulation: &Vec<Triangle2D>,
 ) {
+    let im_width = img.width() as usize;
+    let im_height = img.height() as usize;
     let events = rasterization::prepare_events(triangulation);
     let mut tri_stats = Vec::with_capacity(triangulation.len());
     {
@@ -203,7 +205,7 @@ fn generate_delaunay_image(
             }
         };
 
-        rasterization::rasterize(&events, 1920, 1080, gather_pixel);
+        rasterization::rasterize(&events, im_width, im_height, gather_pixel);
     }
 
     for tstat in tri_stats.iter_mut() {
@@ -235,7 +237,7 @@ fn generate_delaunay_image(
             pixel_id += 1;
         };
 
-        rasterization::rasterize(&events, 1920, 1080, set_pixel);
+        rasterization::rasterize(&events, im_width, im_height, set_pixel);
     }
 }
 
@@ -289,7 +291,7 @@ fn main() {
     let tris = delaunay::triangulate(
         &initial_points,
         (0.0, 0.0),
-        (1920.0, 1080.0)
+        (img.width() as f64, img.height() as f64),
     );
     timer.measure("Calculating delaunay triangulation");
 
