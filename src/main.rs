@@ -16,10 +16,15 @@ use std::time::{Instant, Duration};
 use image::Pixel;
 use rayon::prelude::*;
 use float_ord::FloatOrd;
-use common_geometry::Triangle2D;
+use common_geometry::{Triangle2D, BarycentricConverter};
 
 use tree_2d::{Point2D, Tree2D, Coord, NearestNeighbor2D, StupidFind};
 use halton::HaltonSequence;
+
+struct TriangleColorConfiguration {
+    pub colors: [(f64, f64, f64); 3],
+    pub bary: BarycentricConverter,
+}
 
 fn convert_to_luma(color: &image::Rgb<u8>) -> Coord {
     0.2126 * color.data[0] as Coord + 0.7152 * color.data[1] as Coord + 0.0722 * color.data[2] as Coord
@@ -176,74 +181,80 @@ fn generate_celly_image<T: NearestNeighbor2D + Sync>(img: &mut image::RgbImage, 
     // println!("Wastefulness: {}", wastefulness);
 }
 
+fn sample_point_from_image(
+    img: &image::RgbImage,
+    (x, y): Point2D,
+) -> (f64, f64, f64) {
+    let clamp = |c: f64, max: f64| {
+        if c < 0.0 { 0.0 }
+        else if c > max { max }
+        else { c }
+    };
+    // Nearest neighbor, because why not
+    let ix = clamp(x, (img.width() - 1) as f64).round() as u32;
+    let iy = clamp(y, (img.height() - 1) as f64).round() as u32;
+    let point = img.get_pixel(ix, iy);
+    (point.data[0] as f64, point.data[1] as f64, point.data[2] as f64)
+}
+
 fn generate_delaunay_image(
     img: &mut image::RgbImage,
     triangulation: &Vec<Triangle2D>,
 ) {
     let im_width = img.width() as usize;
     let im_height = img.height() as usize;
+
+    // Calculate barycentric converters and colors
+    let ccinfo = {
+        let mut ccinfo = Vec::with_capacity(triangulation.len());
+        for t in triangulation.iter() {
+            // let c0 = (255.0, 0.0, 0.0);
+            // let c1 = (0.0, 255.0, 0.0);
+            // let c2 = (0.0, 0.0, 255.0);
+            let c0 = sample_point_from_image(img, t[0]);
+            let c1 = sample_point_from_image(img, t[1]);
+            let c2 = sample_point_from_image(img, t[2]);
+            ccinfo.push(TriangleColorConfiguration {
+                colors: [c0, c1, c2],
+                bary: BarycentricConverter::from_triangle(t),
+            });
+        }
+        ccinfo
+    };
+
     let events = rasterization::prepare_events(triangulation);
-    let mut tri_stats = Vec::with_capacity(triangulation.len());
-    {
-        let mut pixel_id = 0;
 
-        tri_stats.resize(triangulation.len(), ((0.0, 0.0, 0.0), 0));
-        let gather_pixel = |
-            x: u32, y: u32,
-            tri_id: Option<usize>,
-        | {
-            match tri_id {
-                Some(id) => {
-                    let pix = img.get_pixel(x, y);
-                    let tstats = &mut tri_stats[id];
-                    (tstats.0).0 += pix.data[0] as Coord;
-                    (tstats.0).1 += pix.data[1] as Coord;
-                    (tstats.0).2 += pix.data[2] as Coord;
-                    tstats.1 += 1;
-                },
-                None => {},
+    let mut pixel_id = 0;
+    let mut set_pixel = |
+        x: u32, y: u32,
+        tri_id: Option<usize>,
+    | {
+        let pixel = match tri_id {
+            Some(id) => {
+                // let tstat = tri_stats[id];
+                let cc = &ccinfo[id];
+                let (a, b, c) = cc.bary.convert_to_barycentric(
+                    (x as f64 + 0.5, y as f64 + 0.5)
+                );
+                let r = a * cc.colors[0].0
+                      + b * cc.colors[1].0
+                      + c * cc.colors[2].0;
+                let g = a * cc.colors[0].1
+                      + b * cc.colors[1].1
+                      + c * cc.colors[2].1;
+                let b = a * cc.colors[0].2
+                      + b * cc.colors[1].2
+                      + c * cc.colors[2].2;
+                image::Rgb { data: [r as u8, g as u8, b as u8] }
             }
+            None => image::Rgb { data: [0; 3] },
         };
+        img.put_pixel(x, y, pixel);
+        pixel_id += 1;
+    };
 
-        rasterization::rasterize(&events, im_width, im_height, gather_pixel);
-    }
-
-    for tstat in tri_stats.iter_mut() {
-        (tstat.0).0 /= tstat.1 as Coord;
-        (tstat.0).1 /= tstat.1 as Coord;
-        (tstat.0).2 /= tstat.1 as Coord;
-    }
-
-    {
-        let mut pixel_id = 0;
-        let mut set_pixel = |
-            x: u32, y: u32,
-            tri_id: Option<usize>,
-        | {
-            let pixel = match tri_id {
-                Some(id) => {
-                    let tstat = tri_stats[id];
-                    image::Rgb {
-                        data: [
-                            (tstat.0).0 as u8,
-                            (tstat.0).1 as u8,
-                            (tstat.0).2 as u8,
-                        ]
-                    }
-                }
-                None => image::Rgb { data: [0; 3] },
-            };
-            img.put_pixel(x, y, pixel);
-            pixel_id += 1;
-        };
-
-        rasterization::rasterize(&events, im_width, im_height, set_pixel);
-    }
+    rasterization::rasterize(&events, im_width, im_height, set_pixel);
 }
-
-// fn draw_distribution(points: &Vec<Point2D>) -> image::RgbImage {
-//     let mut img =
-// }
 
 fn duration_as_seconds(d: Duration) -> f64 {
     d.as_secs() as f64 + d.subsec_micros() as f64 / 1e6

@@ -47,3 +47,35 @@ pub fn is_left_from_segment(
 pub fn goes_left((ox, oy): Point2D, (ux, uy): Point2D, (vx, vy): Point2D) -> bool {
     (ux - ox) * (vy - oy) - (uy - oy) * (vx - ux) >= 0.0
 }
+
+pub struct BarycentricConverter {
+    mat: [[Coord; 2]; 2],
+    v: Point2D,
+}
+
+impl BarycentricConverter {
+    pub fn from_triangle(t: &Triangle2D) -> BarycentricConverter {
+        let o0 = t[0];
+        let v0 = (t[1].0 - t[0].0, t[1].1 - t[0].1);
+        let v1 = (t[2].0 - t[0].0, t[2].1 - t[0].1);
+        let invd = 1.0 / det2(v0.0, v0.1, v1.0, v1.1);
+        BarycentricConverter {
+            mat: [
+                [v1.1 * invd, -v1.0 * invd],
+                [-v0.1 * invd, v0.0 * invd],
+            ],
+            v: o0,
+        }
+    }
+
+    pub fn convert_to_barycentric(
+        &self,
+        (x, y): Point2D,
+    ) -> (Coord, Coord, Coord) {
+        let dx = x - self.v.0;
+        let dy = y - self.v.1;
+        let u = self.mat[0][0] * dx + self.mat[0][1] * dy;
+        let v = self.mat[1][0] * dx + self.mat[1][1] * dy;
+        (1.0 - u - v, u, v)
+    }
+}
