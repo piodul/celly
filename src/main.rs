@@ -23,6 +23,7 @@ use halton::HaltonSequence;
 
 struct TriangleColorConfiguration {
     pub colors: [(f64, f64, f64); 3],
+    pub weights: [f64; 3],
     pub bary: BarycentricConverter,
 }
 
@@ -204,25 +205,70 @@ fn generate_delaunay_image(
     let im_width = img.width() as usize;
     let im_height = img.height() as usize;
 
+    let events = rasterization::prepare_events(triangulation);
+
     // Calculate barycentric converters and colors
-    let ccinfo = {
+    let mut ccinfo = {
         let mut ccinfo = Vec::with_capacity(triangulation.len());
         for t in triangulation.iter() {
             // let c0 = (255.0, 0.0, 0.0);
             // let c1 = (0.0, 255.0, 0.0);
             // let c2 = (0.0, 0.0, 255.0);
-            let c0 = sample_point_from_image(img, t[0]);
-            let c1 = sample_point_from_image(img, t[1]);
-            let c2 = sample_point_from_image(img, t[2]);
             ccinfo.push(TriangleColorConfiguration {
-                colors: [c0, c1, c2],
+                colors: [(0.0, 0.0, 0.0); 3],
+                weights: [0.0; 3],
                 bary: BarycentricConverter::from_triangle(t),
             });
         }
         ccinfo
     };
 
-    let events = rasterization::prepare_events(triangulation);
+    {
+        let mut calc_color = |
+            x: u32, y: u32,
+            tri_id: Option<usize>,
+        | {
+            if let Some(tri_id) = tri_id {
+                let cc = &mut ccinfo[tri_id];
+                let point = img.get_pixel(x, y);
+                let (a, b, c) = cc.bary.convert_to_barycentric(
+                    (x as f64 + 0.5, y as f64 + 0.5)
+                );
+                cc.colors[0].0 += a * point.data[0] as f64;
+                cc.colors[0].1 += a * point.data[1] as f64;
+                cc.colors[0].2 += a * point.data[2] as f64;
+                cc.colors[1].0 += b * point.data[0] as f64;
+                cc.colors[1].1 += b * point.data[1] as f64;
+                cc.colors[1].2 += b * point.data[2] as f64;
+                cc.colors[2].0 += c * point.data[0] as f64;
+                cc.colors[2].1 += c * point.data[1] as f64;
+                cc.colors[2].2 += c * point.data[2] as f64;
+                cc.weights[0] += a;
+                cc.weights[1] += b;
+                cc.weights[2] += c;
+            }
+        };
+        rasterization::rasterize(&events, im_width, im_height, calc_color);
+    }
+
+    // Scale the colors
+    for cc in ccinfo.iter_mut() {
+        if cc.weights[0] != 0.0 {
+            cc.colors[0].0 /= cc.weights[0];
+            cc.colors[0].1 /= cc.weights[0];
+            cc.colors[0].2 /= cc.weights[0];
+        }
+        if cc.weights[1] != 0.0 {
+            cc.colors[1].0 /= cc.weights[1];
+            cc.colors[1].1 /= cc.weights[1];
+            cc.colors[1].2 /= cc.weights[1];
+        }
+        if cc.weights[2] != 0.0 {
+            cc.colors[2].0 /= cc.weights[2];
+            cc.colors[2].1 /= cc.weights[2];
+            cc.colors[2].2 /= cc.weights[2];
+        }
+    }
 
     let mut pixel_id = 0;
     let mut set_pixel = |
