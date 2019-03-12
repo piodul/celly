@@ -1,9 +1,9 @@
-use std::collections::BTreeSet;
-use std::cmp::{Ord, PartialOrd, Ordering};
 use std::cmp;
+use std::cmp::{Ord, Ordering, PartialOrd};
+use std::collections::BTreeSet;
 
-use common_geometry::{Coord, Point2D, Triangle2D};
-use float_ord::FloatOrd;
+use crate::common_geometry::{Coord, Point2D, Triangle2D};
+use crate::float_ord::FloatOrd;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 struct RasterizationLineNode {
@@ -14,8 +14,7 @@ struct RasterizationLineNode {
 
 impl RasterizationLineNode {
     fn get_intersection_at_y(&self, y: Coord) -> Coord {
-        let progress = (y - self.upper_pt.1)
-            / (self.lower_pt.1 - self.upper_pt.1);
+        let progress = (y - self.upper_pt.1) / (self.lower_pt.1 - self.upper_pt.1);
         self.upper_pt.0 + progress * (self.lower_pt.0 - self.upper_pt.0)
     }
 }
@@ -24,14 +23,8 @@ impl Eq for RasterizationLineNode {}
 
 impl PartialOrd for RasterizationLineNode {
     fn partial_cmp(&self, other: &RasterizationLineNode) -> Option<Ordering> {
-        let p1 = cmp::max(
-            FloatOrd(self.upper_pt.1),
-            FloatOrd(other.upper_pt.1),
-        ).0;
-        let p2 = cmp::min(
-            FloatOrd(self.lower_pt.1),
-            FloatOrd(other.lower_pt.1),
-        ).0;
+        let p1 = cmp::max(FloatOrd(self.upper_pt.1), FloatOrd(other.upper_pt.1)).0;
+        let p2 = cmp::min(FloatOrd(self.lower_pt.1), FloatOrd(other.lower_pt.1)).0;
         let midpt = 0.5 * (p1 + p2);
 
         let l_x = self.get_intersection_at_y(midpt);
@@ -39,11 +32,9 @@ impl PartialOrd for RasterizationLineNode {
 
         let choice = if l_x < r_x {
             Ordering::Less
-        }
-        else if l_x > r_x {
+        } else if l_x > r_x {
             Ordering::Greater
-        }
-        else {
+        } else {
             Ordering::Equal
         };
 
@@ -58,7 +49,10 @@ impl Ord for RasterizationLineNode {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum RasterizationEventType { End, Begin }
+enum RasterizationEventType {
+    End,
+    Begin,
+}
 
 #[derive(Clone, Copy, Debug)]
 struct RasterizationEvent {
@@ -69,17 +63,11 @@ struct RasterizationEvent {
 
 pub struct RasterizationEvents(Vec<RasterizationEvent>);
 
-pub fn prepare_events(
-    tris: &[Triangle2D],
-) -> RasterizationEvents {
+pub fn prepare_events(tris: &[Triangle2D]) -> RasterizationEvents {
     let mut events = Vec::new();
     for (id, tri) in tris.iter().enumerate() {
-        let tri_edges = [
-            (tri[1], tri[0]),
-            (tri[2], tri[1]),
-            (tri[0], tri[2]),
-        ];
-        for (a, b) in tri_edges.into_iter() {
+        let tri_edges = [(tri[1], tri[0]), (tri[2], tri[1]), (tri[0], tri[2])];
+        for (a, b) in tri_edges.iter() {
             if a.1 < b.1 {
                 let node = RasterizationLineNode {
                     upper_pt: *a,
@@ -130,10 +118,8 @@ impl<'a> Broom<'a> {
             self.current_event_id += 1;
 
             match curr_event.etype {
-                RasterizationEventType::Begin =>
-                    self.broom_state.insert(curr_event.node),
-                RasterizationEventType::End =>
-                    self.broom_state.remove(&curr_event.node),
+                RasterizationEventType::Begin => self.broom_state.insert(curr_event.node),
+                RasterizationEventType::End => self.broom_state.remove(&curr_event.node),
             };
         }
     }
@@ -145,22 +131,14 @@ impl<'a> Broom<'a> {
 
 pub fn rasterize<F: FnMut(u32, u32, Option<usize>)>(
     events: &RasterizationEvents,
-    width: usize, height: usize,
+    width: usize,
+    height: usize,
     mut f: F,
 ) {
-    // println!("Events: {:?}", events.0);
-
     let mut broom = Broom::new(events);
     for y in 0..height {
         let fy = y as Coord + 0.5;
         broom.advance_to(fy);
-
-        // print!("Break events:");
-        // for bevt in broom.get_state().iter() {
-        //     let bound_x = bevt.get_intersection_at_y(fy);
-        //     print!(" {}", bound_x);
-        // }
-        // println!("");
 
         let mut curr_tri_id = None;
         let mut curr_x = 0;
