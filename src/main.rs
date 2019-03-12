@@ -1,25 +1,24 @@
 extern crate image;
 extern crate rayon;
 
-mod float_ord;
-mod tree_2d;
-mod halton;
-mod delaunay;
-mod rasterization;
 mod common_geometry;
+mod delaunay;
+mod float_ord;
+mod halton;
+mod rasterization;
+mod tree_2d;
 
-use std::env::args_os;
-use std::cmp;
-use std::path::Path;
-use std::ffi::OsString;
-use std::time::{Instant, Duration};
-use image::Pixel;
+use crate::common_geometry::{BarycentricConverter, Triangle2D};
+use crate::float_ord::FloatOrd;
 use rayon::prelude::*;
-use float_ord::FloatOrd;
-use common_geometry::{Triangle2D, BarycentricConverter};
+use std::cmp;
+use std::env::args_os;
+use std::ffi::OsString;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
-use tree_2d::{Point2D, Tree2D, Coord, NearestNeighbor2D, StupidFind};
-use halton::HaltonSequence;
+use crate::halton::HaltonSequence;
+use crate::tree_2d::{Coord, Point2D};
 
 struct TriangleColorConfiguration {
     pub colors: [(f64, f64, f64); 3],
@@ -28,10 +27,17 @@ struct TriangleColorConfiguration {
 }
 
 fn convert_to_luma(color: &image::Rgb<u8>) -> Coord {
-    0.2126 * color.data[0] as Coord + 0.7152 * color.data[1] as Coord + 0.0722 * color.data[2] as Coord
+    0.2126 * color.data[0] as Coord
+        + 0.7152 * color.data[1] as Coord
+        + 0.0722 * color.data[2] as Coord
 }
 
-fn generate_initial_points(diff_img: &Vec<Coord>, n: usize, width: u32, height: u32) -> Vec<Point2D> {
+fn generate_initial_points(
+    diff_img: &Vec<Coord>,
+    n: usize,
+    width: u32,
+    height: u32,
+) -> Vec<Point2D> {
     let f_width = width as Coord;
     let f_height = height as Coord;
     let mut ret = Vec::with_capacity(n);
@@ -110,98 +116,7 @@ fn compute_differential_image(img: &image::RgbImage) -> Vec<Coord> {
     ret3
 }
 
-fn generate_celly_image<T: NearestNeighbor2D + Sync>(img: &mut image::RgbImage, points: Vec<Point2D>) {
-    let pt1 = Instant::now();
-    let plen = points.len();
-    let tree = T::new_from_points(points);
-    let mut acc_colors = vec![(0.0, 0.0, 0.0, 0); plen];
-    let mut fy = 0.5;
-
-    let im_width = img.width();
-    let im_height = img.height();
-
-    // let mut idx_cache = Vec::with_capacity((img.width() * img.height()) as usize);
-    let mut idx_cache = vec![0; (im_width * im_height) as usize];
-    idx_cache.par_iter_mut().enumerate().for_each(|(id, cell)| {
-        let x = id as i32 % im_width as i32;
-        let y = id as i32 / im_width as i32;
-        let fx = x as f64 + 0.5;
-        let fy = y as f64 + 0.5;
-        let (closest_idx, cnt) = tree.find_closest((fx, fy));
-        *cell = closest_idx;
-    });
-
-    let mut pix_id = 0;
-    for y in 0..im_height {
-        for x in 0..im_width {
-            let px = img.get_pixel(x, y);
-            // let (closest_idx, cnt) = tree.find_closest((fx, fy));
-            let closest_idx = idx_cache[pix_id];
-            let acc = &mut acc_colors[closest_idx as usize];
-            acc.0 += px.data[0] as Coord;
-            acc.1 += px.data[1] as Coord;
-            acc.2 += px.data[2] as Coord;
-            acc.3 += 1;
-
-            pix_id += 1;
-        }
-    }
-
-    for acc in acc_colors.iter_mut() {
-        let recip = 1.0 / acc.3 as Coord;
-        acc.0 *= recip;
-        acc.1 *= recip;
-        acc.2 *= recip;
-    }
-
-    let pt2 = Instant::now();
-
-    fy = 0.5;
-    let mut pix_id = 0;
-    for y in 0..im_height {
-        let mut fx = 0.5;
-        for x in 0..im_width {
-            let closest_idx = idx_cache[pix_id];
-            pix_id += 1;
-            // let closest_idx = tree.find_closest((fx, fy)).0;
-            let acc = &acc_colors[closest_idx as usize];
-            img.put_pixel(x, y, image::Rgb {
-                data: [acc.0 as u8, acc.1 as u8, acc.2 as u8]
-            });
-
-            fx += 1.0;
-        }
-        fy += 1.0;
-    }
-
-    let pt3 = Instant::now();
-    println!("    Collecting sums took {}s", duration_as_seconds(pt2 - pt1));
-    println!("    Setting colors took {}s", duration_as_seconds(pt3 - pt2));
-
-    // let wastefulness = total_visited_nodes as f64 / (total_lookups as f64 * acc_colors.len() as f64);
-    // println!("Wastefulness: {}", wastefulness);
-}
-
-fn sample_point_from_image(
-    img: &image::RgbImage,
-    (x, y): Point2D,
-) -> (f64, f64, f64) {
-    let clamp = |c: f64, max: f64| {
-        if c < 0.0 { 0.0 }
-        else if c > max { max }
-        else { c }
-    };
-    // Nearest neighbor, because why not
-    let ix = clamp(x, (img.width() - 1) as f64).round() as u32;
-    let iy = clamp(y, (img.height() - 1) as f64).round() as u32;
-    let point = img.get_pixel(ix, iy);
-    (point.data[0] as f64, point.data[1] as f64, point.data[2] as f64)
-}
-
-fn generate_delaunay_image(
-    img: &mut image::RgbImage,
-    triangulation: &Vec<Triangle2D>,
-) {
+fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triangle2D>) {
     let im_width = img.width() as usize;
     let im_height = img.height() as usize;
 
@@ -211,9 +126,6 @@ fn generate_delaunay_image(
     let mut ccinfo = {
         let mut ccinfo = Vec::with_capacity(triangulation.len());
         for t in triangulation.iter() {
-            // let c0 = (255.0, 0.0, 0.0);
-            // let c1 = (0.0, 255.0, 0.0);
-            // let c2 = (0.0, 0.0, 255.0);
             ccinfo.push(TriangleColorConfiguration {
                 colors: [(0.0, 0.0, 0.0); 3],
                 weights: [0.0; 3],
@@ -224,16 +136,13 @@ fn generate_delaunay_image(
     };
 
     {
-        let mut calc_color = |
-            x: u32, y: u32,
-            tri_id: Option<usize>,
-        | {
+        let calc_color = |x: u32, y: u32, tri_id: Option<usize>| {
             if let Some(tri_id) = tri_id {
                 let cc = &mut ccinfo[tri_id];
                 let point = img.get_pixel(x, y);
-                let (a, b, c) = cc.bary.convert_to_barycentric(
-                    (x as f64 + 0.5, y as f64 + 0.5)
-                );
+                let (a, b, c) = cc
+                    .bary
+                    .convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
                 cc.colors[0].0 += a * point.data[0] as f64;
                 cc.colors[0].1 += a * point.data[1] as f64;
                 cc.colors[0].2 += a * point.data[2] as f64;
@@ -271,27 +180,19 @@ fn generate_delaunay_image(
     }
 
     let mut pixel_id = 0;
-    let mut set_pixel = |
-        x: u32, y: u32,
-        tri_id: Option<usize>,
-    | {
+    let set_pixel = |x: u32, y: u32, tri_id: Option<usize>| {
         let pixel = match tri_id {
             Some(id) => {
-                // let tstat = tri_stats[id];
                 let cc = &ccinfo[id];
-                let (a, b, c) = cc.bary.convert_to_barycentric(
-                    (x as f64 + 0.5, y as f64 + 0.5)
-                );
-                let r = a * cc.colors[0].0
-                      + b * cc.colors[1].0
-                      + c * cc.colors[2].0;
-                let g = a * cc.colors[0].1
-                      + b * cc.colors[1].1
-                      + c * cc.colors[2].1;
-                let b = a * cc.colors[0].2
-                      + b * cc.colors[1].2
-                      + c * cc.colors[2].2;
-                image::Rgb { data: [r as u8, g as u8, b as u8] }
+                let (a, b, c) = cc
+                    .bary
+                    .convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
+                let r = a * cc.colors[0].0 + b * cc.colors[1].0 + c * cc.colors[2].0;
+                let g = a * cc.colors[0].1 + b * cc.colors[1].1 + c * cc.colors[2].1;
+                let b = a * cc.colors[0].2 + b * cc.colors[1].2 + c * cc.colors[2].2;
+                image::Rgb {
+                    data: [r as u8, g as u8, b as u8],
+                }
             }
             None => image::Rgb { data: [0; 3] },
         };
@@ -329,7 +230,12 @@ fn main() {
     let mut args = args_os();
     args.next();
     let path = args.next().unwrap();
-    let fineness = args.next().unwrap().to_string_lossy().parse::<u32>().unwrap();
+    let fineness = args
+        .next()
+        .unwrap()
+        .to_string_lossy()
+        .parse::<u32>()
+        .unwrap();
 
     let mut timer = Timer::new();
     let mut img = image::open(&Path::new(&path)).unwrap().to_rgb();
@@ -344,7 +250,6 @@ fn main() {
     let initial_points = generate_initial_points(&diff_img, point_count, img.width(), img.height());
     timer.measure("Generating initial points");
 
-    // let points = migrate_points(&img, &diff_img, initial_points, img.width(), img.height(), 10);
     let tris = delaunay::triangulate(
         &initial_points,
         (0.0, 0.0),
@@ -354,9 +259,6 @@ fn main() {
 
     generate_delaunay_image(&mut img, &tris);
     timer.measure("Generating delaunay image");
-
-    // generate_celly_image::<Tree2D>(&mut img, initial_points);
-    // timer.measure("Generating celly image");
 
     let new_path = String::from(path.to_string_lossy()) + ".cellied.png";
     img.save(OsString::from(new_path)).unwrap();

@@ -1,4 +1,4 @@
-use float_ord::FloatOrd;
+use crate::float_ord::FloatOrd;
 
 pub type Coord = f64;
 pub type Point2D = (Coord, Coord);
@@ -27,16 +27,6 @@ fn distance_squared(p1: Point2D, p2: Point2D) -> Coord {
     dx * dx + dy * dy
 }
 
-fn partition_slice<T, F>(slice: &mut [T], f: F) where F: Fn(&T) -> bool {
-    let mut false_range = 0;
-    for n in 0..slice.len() {
-        if !f(&slice[n]) && false_range != n {
-            slice.swap(false_range, n);
-            false_range += 1;
-        }
-    }
-}
-
 impl Tree2D {
     fn new_inner_from_points(&mut self, depth: u32, points: &mut [Point2D]) -> u32 {
         let idx = self.nodes.len() as u32;
@@ -54,8 +44,7 @@ impl Tree2D {
 
         if depth % 2 == 0 {
             points.sort_unstable_by_key(|p| FloatOrd(p.0));
-        }
-        else {
+        } else {
             points.sort_unstable_by_key(|p| FloatOrd(p.1));
         }
 
@@ -68,14 +57,26 @@ impl Tree2D {
             right: 0,
         });
 
-        self.nodes[idx as usize].left = self.new_inner_from_points(depth + 1, &mut points[0..median_index]);
-        self.nodes[idx as usize].right = self.new_inner_from_points(depth + 1, &mut points[median_index + 1..plen]);
+        self.nodes[idx as usize].left =
+            self.new_inner_from_points(depth + 1, &mut points[0..median_index]);
+        self.nodes[idx as usize].right =
+            self.new_inner_from_points(depth + 1, &mut points[median_index + 1..plen]);
         idx
     }
 
-    fn find_closest_inner(&self, closest: &mut (u32, Coord), depth: u32, curr_range: u32, idx: u32, pt: Point2D) -> usize {
+    fn find_closest_inner(
+        &self,
+        closest: &mut (u32, Coord),
+        depth: u32,
+        curr_range: u32,
+        idx: u32,
+        pt: Point2D,
+    ) -> usize {
         if curr_range <= SWITCH_TO_LINEAR {
-            for (id, node) in self.nodes[idx as usize..(idx + curr_range) as usize].iter().enumerate() {
+            for (id, node) in self.nodes[idx as usize..(idx + curr_range) as usize]
+                .iter()
+                .enumerate()
+            {
                 let new_distance = distance_squared(pt, node.point);
                 if closest.1 > new_distance {
                     closest.0 = idx + id as u32;
@@ -97,17 +98,21 @@ impl Tree2D {
         let right_len = curr_range - (curr_range / 2) - 1;
 
         let is_even = depth % 2 == 0;
-        let (first_node, first_len, next_node, next_len) = if (is_even && pt.0 < node.point.0) || (!is_even && pt.1 < node.point.1) {
-            (node.left, left_len, node.right, right_len)
-        }
-        else {
-            (node.right, right_len, node.left, left_len)
-        };
+        let (first_node, first_len, next_node, next_len) =
+            if (is_even && pt.0 < node.point.0) || (!is_even && pt.1 < node.point.1) {
+                (node.left, left_len, node.right, right_len)
+            } else {
+                (node.right, right_len, node.left, left_len)
+            };
 
         let mut visited_count = 1;
         visited_count += self.find_closest_inner(closest, depth + 1, first_len, first_node, pt);
 
-        let distance = if is_even { pt.0 - node.point.0 } else { pt.1 - node.point.1 };
+        let distance = if is_even {
+            pt.0 - node.point.0
+        } else {
+            pt.1 - node.point.1
+        };
         if distance * distance < closest.1 {
             visited_count += self.find_closest_inner(closest, depth + 1, next_len, next_node, pt);
         }
@@ -121,7 +126,7 @@ impl NearestNeighbor2D for Tree2D {
         assert!(!points.is_empty());
 
         let mut ret = Tree2D {
-            nodes: Vec::with_capacity(points.len())
+            nodes: Vec::with_capacity(points.len()),
         };
         ret.new_inner_from_points(0, points.as_mut_slice());
         ret

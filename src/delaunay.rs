@@ -1,15 +1,12 @@
-use std::f64;
-use std::collections::{HashSet, VecDeque};
-use std::mem;
+use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
 use std::fs::File;
-use std::io::BufWriter;
 use std::io;
 use std::io::prelude::*;
+use std::io::BufWriter;
 
-use common_geometry::*;
-use float_ord::FloatOrd;
+use crate::common_geometry::*;
 
 #[derive(Debug)]
 struct TriWithNbs {
@@ -45,8 +42,7 @@ impl TriangleNode {
                     true => 0,
                     false => 2,
                 }
-            }
-            else {
+            } else {
                 // Is in triangle opposite to 1 or 0
                 match is_left_from_segment(node.split_point, tri[2], point) {
                     true => 1,
@@ -106,14 +102,14 @@ impl TriangleNode {
                 v[e0[2] - 1].nbs[2] = e2[0];
 
                 [e0[0], e1[1], e2[2]]
-            },
+            }
             None => {
                 v.push(TriWithNbs {
                     pts: tri,
                     nbs: [0; 3],
                 });
                 [v.len(); 3]
-            },
+            }
         }
     }
 }
@@ -150,11 +146,7 @@ impl TriangleTree {
 
     fn dump_triangles(&self) -> Vec<TriWithNbs> {
         let mut v = Vec::new();
-        TriangleNode::dump_triangles(
-            self.root.as_ref(),
-            self.core_triangle,
-            &mut v,
-        );
+        TriangleNode::dump_triangles(self.root.as_ref(), self.core_triangle, &mut v);
         v
     }
 }
@@ -178,22 +170,23 @@ fn cline_renka_test(
     let (v2x, v2y) = (bx - ax, by - ay);
     let (v3x, v3y) = (dx - cx, dy - cy);
     let (v4x, v4y) = (bx - cx, by - cy);
-    let cosA = v1x * v2x + v1y * v2y;
-    let cosD = v3x * v4x + v3y * v4y;
+    let cos_a = v1x * v2x + v1y * v2y;
+    let cos_d = v3x * v4x + v3y * v4y;
 
-    if cosA < 0.0 && cosD < 0.0 {
+    if cos_a < 0.0 && cos_d < 0.0 {
         return true;
     }
-    if cosA > 0.0 && cosD > 0.0 {
+    if cos_a > 0.0 && cos_d > 0.0 {
         return false;
     }
 
-    let sinA = det2(v1x, v1y, v2x, v2y).abs();
-    let sinD = det2(v3x, v3y, v4x, v4y).abs();
+    let sin_a = det2(v1x, v1y, v2x, v2y).abs();
+    let sin_d = det2(v3x, v3y, v4x, v4y).abs();
 
-    cosA * sinD + cosD * sinA < 0.0
+    cos_a * sin_d + cos_d * sin_a < 0.0
 }
 
+#[allow(unused)]
 fn dump_triangles(file_id: usize, tris: &Vec<TriWithNbs>) -> io::Result<()> {
     let file = File::create(format!("dump_{:04}.txt", file_id))?;
     let mut buf_writer = BufWriter::new(file);
@@ -201,10 +194,8 @@ fn dump_triangles(file_id: usize, tris: &Vec<TriWithNbs>) -> io::Result<()> {
     for tri in tris.iter() {
         buf_writer.write_fmt(format_args!(
             "{} {} {} {} {} {}\n",
-            tri.pts[0].0, tri.pts[0].1,
-            tri.pts[1].0, tri.pts[1].1,
-            tri.pts[2].0, tri.pts[2].1,
-        ));
+            tri.pts[0].0, tri.pts[0].1, tri.pts[1].0, tri.pts[1].1, tri.pts[2].0, tri.pts[2].1,
+        ))?;
     }
     Ok(())
 }
@@ -217,13 +208,11 @@ fn flip_until_delaunay(tris: &mut Vec<TriWithNbs>) {
 
     let mut iterations = 0;
 
-    let get_two_other_ids = |x| {
-        match x {
-            0 => (1, 2),
-            1 => (2, 0),
-            2 => (0, 1),
-            _ => unreachable!(),
-        }
+    let get_two_other_ids = |x| match x {
+        0 => (1, 2),
+        1 => (2, 0),
+        2 => (0, 1),
+        _ => unreachable!(),
     };
 
     // tid is indexed from 0, while neighbors are indexed from 1
@@ -237,8 +226,11 @@ fn flip_until_delaunay(tris: &mut Vec<TriWithNbs>) {
 
             // Get number of the neighbor's side that is shared with
             // current triangle
-            let nb_nb_num = tris[nb_id].nbs.iter()
-                .position(|id| *id == tid + 1).unwrap();
+            let nb_nb_num = tris[nb_id]
+                .nbs
+                .iter()
+                .position(|id| *id == tid + 1)
+                .unwrap();
             let a_num = nb_num;
             let (b_num, x_num) = get_two_other_ids(nb_num);
             let c_num = nb_nb_num;
@@ -262,15 +254,21 @@ fn flip_until_delaunay(tris: &mut Vec<TriWithNbs>) {
                 // Update references in neighbors
                 let b_nb = tris[tid].nbs[b_num];
                 if b_nb != 0 {
-                    let slot_to_update = tris[b_nb - 1].nbs.iter()
-                        .position(|id| *id == tid + 1).unwrap();
+                    let slot_to_update = tris[b_nb - 1]
+                        .nbs
+                        .iter()
+                        .position(|id| *id == tid + 1)
+                        .unwrap();
                     tris[b_nb - 1].nbs[slot_to_update] = nb_id + 1;
                 }
 
                 let b_nb = tris[nb_id].nbs[d_num];
                 if b_nb != 0 {
-                    let slot_to_update = tris[b_nb - 1].nbs.iter()
-                        .position(|id| *id == nb_id + 1).unwrap();
+                    let slot_to_update = tris[b_nb - 1]
+                        .nbs
+                        .iter()
+                        .position(|id| *id == nb_id + 1)
+                        .unwrap();
                     tris[b_nb - 1].nbs[slot_to_update] = tid + 1;
                 }
 
@@ -299,11 +297,7 @@ fn flip_until_delaunay(tris: &mut Vec<TriWithNbs>) {
     println!("Took {} iterations", iterations);
 }
 
-pub fn triangulate(
-    points: &Vec<Point2D>,
-    (ax, ay): Point2D,
-    (bx, by): Point2D,
-) -> Vec<Triangle2D> {
+pub fn triangulate(points: &Vec<Point2D>, (ax, ay): Point2D, (bx, by): Point2D) -> Vec<Triangle2D> {
     // Calculate a triangle that encompasses whole rectangle
     let base_tri = [
         (ax - (by - ay), by),

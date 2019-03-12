@@ -19,10 +19,18 @@ impl<T: PartialOrd> PartialOrd for FloatOrd<T> {
         self.0.partial_cmp(&other.0)
     }
 
-    fn lt(&self, other: &Self) -> bool { self.0 <  other.0 }
-    fn le(&self, other: &Self) -> bool { self.0 <= other.0 }
-    fn gt(&self, other: &Self) -> bool { self.0 >  other.0 }
-    fn ge(&self, other: &Self) -> bool { self.0 >= other.0 }
+    fn lt(&self, other: &Self) -> bool {
+        self.0 < other.0
+    }
+    fn le(&self, other: &Self) -> bool {
+        self.0 <= other.0
+    }
+    fn gt(&self, other: &Self) -> bool {
+        self.0 > other.0
+    }
+    fn ge(&self, other: &Self) -> bool {
+        self.0 >= other.0
+    }
 }
 
 impl<T: PartialOrd> Ord for FloatOrd<T> {
@@ -31,10 +39,18 @@ impl<T: PartialOrd> Ord for FloatOrd<T> {
     }
 
     fn max(self, other: Self) -> Self {
-        if self > other { self } else { other }
+        if self > other {
+            self
+        } else {
+            other
+        }
     }
 
     fn min(self, other: Self) -> Self {
-        if self < other { self } else { other }
+        if self < other {
+            self
+        } else {
+            other
+        }
     }
 }
