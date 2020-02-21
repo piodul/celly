@@ -136,13 +136,16 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
     };
 
     {
-        let calc_color = |x: u32, y: u32, tri_id: Option<usize>| {
+        let calc_color = |x: u32, y: u32, factor: f64, tri_id: Option<usize>| {
             if let Some(tri_id) = tri_id {
                 let cc = &mut ccinfo[tri_id];
                 let point = img.get_pixel(x, y);
-                let (a, b, c) = cc
+                let (mut a, mut b, mut c) = cc
                     .bary
                     .convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
+                a *= factor;
+                b *= factor;
+                c *= factor;
                 cc.colors[0].0 += a * point.data[0] as f64;
                 cc.colors[0].1 += a * point.data[1] as f64;
                 cc.colors[0].2 += a * point.data[2] as f64;
@@ -180,7 +183,7 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
     }
 
     let mut pixel_id = 0;
-    let set_pixel = |x: u32, y: u32, tri_id: Option<usize>| {
+    let set_pixel = |x: u32, y: u32, factor: f64, tri_id: Option<usize>| {
         let pixel = match tri_id {
             Some(id) => {
                 let cc = &ccinfo[id];
@@ -190,11 +193,9 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
                 let r = a * cc.colors[0].0 + b * cc.colors[1].0 + c * cc.colors[2].0;
                 let g = a * cc.colors[0].1 + b * cc.colors[1].1 + c * cc.colors[2].1;
                 let b = a * cc.colors[0].2 + b * cc.colors[1].2 + c * cc.colors[2].2;
-                image::Rgb {
-                    data: [r as u8, g as u8, b as u8],
-                }
+                image::Rgb([(factor * r) as u8, (factor * g) as u8, (factor * b) as u8])
             }
-            None => image::Rgb { data: [0; 3] },
+            None => image::Rgb([0; 3]),
         };
         img.put_pixel(x, y, pixel);
         pixel_id += 1;

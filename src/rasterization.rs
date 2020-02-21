@@ -129,7 +129,7 @@ impl<'a> Broom<'a> {
     }
 }
 
-pub fn rasterize<F: FnMut(u32, u32, Option<usize>)>(
+pub fn rasterize<F: FnMut(u32, u32, f64, Option<usize>)>(
     events: &RasterizationEvents,
     width: usize,
     height: usize,
@@ -145,7 +145,7 @@ pub fn rasterize<F: FnMut(u32, u32, Option<usize>)>(
         for bevt in broom.get_state().iter() {
             let bound_x = bevt.get_intersection_at_y(fy);
             while curr_x < width && curr_x as Coord + 0.5 < bound_x {
-                f(curr_x as u32, y as u32, curr_tri_id);
+                f(curr_x as u32, y as u32, 1.0, curr_tri_id);
                 curr_x += 1;
             }
 
@@ -153,7 +153,7 @@ pub fn rasterize<F: FnMut(u32, u32, Option<usize>)>(
         }
 
         while curr_x < width {
-            f(curr_x as u32, y as u32, curr_tri_id);
+            f(curr_x as u32, y as u32, 1.0, curr_tri_id);
             curr_x += 1;
         }
     }
