@@ -67,7 +67,7 @@ pub fn prepare_events(tris: &[Triangle2D]) -> RasterizationEvents {
     let mut events = Vec::new();
     for (id, tri) in tris.iter().enumerate() {
         let tri_edges = [(tri[1], tri[0]), (tri[2], tri[1]), (tri[0], tri[2])];
-        for (a, b) in tri_edges.into_iter() {
+        for (a, b) in tri_edges.iter() {
             if a.1 < b.1 {
                 let node = RasterizationLineNode {
                     upper_pt: *a,
