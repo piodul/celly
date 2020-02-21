@@ -23,6 +23,12 @@ impl Eq for RasterizationLineNode {}
 
 impl PartialOrd for RasterizationLineNode {
     fn partial_cmp(&self, other: &RasterizationLineNode) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RasterizationLineNode {
+    fn cmp(&self, other: &RasterizationLineNode) -> Ordering {
         let p1 = cmp::max(FloatOrd(self.upper_pt.1), FloatOrd(other.upper_pt.1)).0;
         let p2 = cmp::min(FloatOrd(self.lower_pt.1), FloatOrd(other.lower_pt.1)).0;
         let midpt = 0.5 * (p1 + p2);
@@ -30,21 +36,13 @@ impl PartialOrd for RasterizationLineNode {
         let l_x = self.get_intersection_at_y(midpt);
         let r_x = other.get_intersection_at_y(midpt);
 
-        let choice = if l_x < r_x {
+        if l_x < r_x {
             Ordering::Less
         } else if l_x > r_x {
             Ordering::Greater
         } else {
             Ordering::Equal
-        };
-
-        Some(choice)
-    }
-}
-
-impl Ord for RasterizationLineNode {
-    fn cmp(&self, other: &RasterizationLineNode) -> Ordering {
-        self.partial_cmp(other).unwrap()
+        }
     }
 }
 
