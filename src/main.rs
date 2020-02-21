@@ -10,6 +10,7 @@ mod tree_2d;
 
 use crate::common_geometry::Triangle2D;
 use crate::float_ord::FloatOrd;
+use image::Pixel;
 use rayon::prelude::*;
 use std::cmp;
 use std::env::args_os;
@@ -21,9 +22,9 @@ use crate::halton::HaltonSequence;
 use crate::tree_2d::{Coord, Point2D};
 
 fn convert_to_luma(color: &image::Rgb<u8>) -> Coord {
-    0.2126 * color.data[0] as Coord
-        + 0.7152 * color.data[1] as Coord
-        + 0.0722 * color.data[2] as Coord
+    0.2126 * color.channels()[0] as Coord
+        + 0.7152 * color.channels()[1] as Coord
+        + 0.0722 * color.channels()[2] as Coord
 }
 
 fn generate_initial_points(
@@ -121,9 +122,9 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
         Some(id) => {
             let pix = img.get_pixel(x, y);
             let tstats = &mut tri_stats[id];
-            (tstats.0).0 += pix.data[0] as Coord;
-            (tstats.0).1 += pix.data[1] as Coord;
-            (tstats.0).2 += pix.data[2] as Coord;
+            (tstats.0).0 += pix.channels()[0] as Coord;
+            (tstats.0).1 += pix.channels()[1] as Coord;
+            (tstats.0).2 += pix.channels()[2] as Coord;
             tstats.1 += 1;
         }
         None => {}
@@ -142,11 +143,9 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
         let pixel = match tri_id {
             Some(id) => {
                 let tstat = tri_stats[id];
-                image::Rgb {
-                    data: [(tstat.0).0 as u8, (tstat.0).1 as u8, (tstat.0).2 as u8],
-                }
+                image::Rgb([(tstat.0).0 as u8, (tstat.0).1 as u8, (tstat.0).2 as u8])
             }
-            None => image::Rgb { data: [0; 3] },
+            None => image::Rgb([0; 3]),
         };
         img.put_pixel(x, y, pixel);
         pixel_id += 1;
