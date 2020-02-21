@@ -10,6 +10,7 @@ mod tree_2d;
 
 use crate::common_geometry::{BarycentricConverter, Triangle2D};
 use crate::float_ord::FloatOrd;
+use image::Pixel;
 use rayon::prelude::*;
 use std::cmp;
 use std::env::args_os;
@@ -27,9 +28,9 @@ struct TriangleColorConfiguration {
 }
 
 fn convert_to_luma(color: &image::Rgb<u8>) -> Coord {
-    0.2126 * color.data[0] as Coord
-        + 0.7152 * color.data[1] as Coord
-        + 0.0722 * color.data[2] as Coord
+    0.2126 * color.channels()[0] as Coord
+        + 0.7152 * color.channels()[1] as Coord
+        + 0.0722 * color.channels()[2] as Coord
 }
 
 fn generate_initial_points(
@@ -146,15 +147,15 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
                 a *= factor;
                 b *= factor;
                 c *= factor;
-                cc.colors[0].0 += a * point.data[0] as f64;
-                cc.colors[0].1 += a * point.data[1] as f64;
-                cc.colors[0].2 += a * point.data[2] as f64;
-                cc.colors[1].0 += b * point.data[0] as f64;
-                cc.colors[1].1 += b * point.data[1] as f64;
-                cc.colors[1].2 += b * point.data[2] as f64;
-                cc.colors[2].0 += c * point.data[0] as f64;
-                cc.colors[2].1 += c * point.data[1] as f64;
-                cc.colors[2].2 += c * point.data[2] as f64;
+                cc.colors[0].0 += a * point.channels()[0] as f64;
+                cc.colors[0].1 += a * point.channels()[1] as f64;
+                cc.colors[0].2 += a * point.channels()[2] as f64;
+                cc.colors[1].0 += b * point.channels()[0] as f64;
+                cc.colors[1].1 += b * point.channels()[1] as f64;
+                cc.colors[1].2 += b * point.channels()[2] as f64;
+                cc.colors[2].0 += c * point.channels()[0] as f64;
+                cc.colors[2].1 += c * point.channels()[1] as f64;
+                cc.colors[2].2 += c * point.channels()[2] as f64;
                 cc.weights[0] += a;
                 cc.weights[1] += b;
                 cc.weights[2] += c;
