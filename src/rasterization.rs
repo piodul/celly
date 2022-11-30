@@ -92,8 +92,7 @@ pub fn prepare_events(tris: &[Triangle2D]) -> RasterizationEvents {
 }
 
 struct Broom<'a> {
-    events: &'a Vec<RasterizationEvent>,
-    current_event_id: usize,
+    events: &'a [RasterizationEvent],
     broom_state: BTreeSet<RasterizationLineNode>,
 }
 
@@ -101,19 +100,16 @@ impl<'a> Broom<'a> {
     fn new(events: &'a RasterizationEvents) -> Broom<'a> {
         Broom {
             events: &events.0,
-            current_event_id: 0,
             broom_state: BTreeSet::new(),
         }
     }
 
     fn advance_to(&mut self, position: Coord) {
-        while self.current_event_id < self.events.len() {
-            if self.events[self.current_event_id].time >= position {
+        while let Some((curr_event, tail)) = self.events.split_first() {
+            if curr_event.time >= position {
                 return;
             }
-
-            let curr_event = &self.events[self.current_event_id];
-            self.current_event_id += 1;
+            self.events = tail;
 
             match curr_event.etype {
                 RasterizationEventType::Begin => self.broom_state.insert(curr_event.node),
