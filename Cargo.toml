@@ -2,10 +2,11 @@
 name = "celly"
 version = "0.1.0"
 authors = ["PhazzaT <piodul@op.pl>"]
+edition = "2021"
 
 [dependencies]
-image = "*"
-rayon = "*"
+image = "0.24.5"
+rayon = "1.6.0"
 
 [profile.release]
-debug = true
+lto = true

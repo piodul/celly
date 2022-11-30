@@ -240,7 +240,7 @@ fn main() {
         .unwrap();
 
     let mut timer = Timer::new();
-    let mut img = image::open(&Path::new(&path)).unwrap().to_rgb();
+    let mut img = image::open(&Path::new(&path)).unwrap().to_rgb8();
     let point_count = ((img.width() * img.height()) / fineness) as usize;
 
     println!("Point count: {}", point_count);
