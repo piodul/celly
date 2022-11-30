@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::ops::{Deref, DerefMut};
+use std::ops::DerefMut;
 
 use std::fs::File;
 use std::io;
@@ -76,17 +76,17 @@ impl TriangleNode {
             Some(node) => {
                 // Compute triangles in lower nodes
                 let e0 = TriangleNode::dump_triangles(
-                    node.children[0].as_ref().map(|p| p.deref()),
+                    node.children[0].as_deref(),
                     [node.split_point, tri[1], tri[2]],
                     v,
                 );
                 let e1 = TriangleNode::dump_triangles(
-                    node.children[1].as_ref().map(|p| p.deref()),
+                    node.children[1].as_deref(),
                     [tri[0], node.split_point, tri[2]],
                     v,
                 );
                 let e2 = TriangleNode::dump_triangles(
-                    node.children[2].as_ref().map(|p| p.deref()),
+                    node.children[2].as_deref(),
                     [tri[0], tri[1], node.split_point],
                     v,
                 );
@@ -297,7 +297,7 @@ fn flip_until_delaunay(tris: &mut Vec<TriWithNbs>) {
     println!("Took {} iterations", iterations);
 }
 
-pub fn triangulate(points: &Vec<Point2D>, (ax, ay): Point2D, (bx, by): Point2D) -> Vec<Triangle2D> {
+pub fn triangulate(points: &[Point2D], (ax, ay): Point2D, (bx, by): Point2D) -> Vec<Triangle2D> {
     // Calculate a triangle that encompasses whole rectangle
     let base_tri = [
         (ax - (by - ay), by),

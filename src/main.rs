@@ -33,12 +33,7 @@ fn convert_to_luma(color: &image::Rgb<u8>) -> Coord {
         + 0.0722 * color.channels()[2] as Coord
 }
 
-fn generate_initial_points(
-    diff_img: &Vec<Coord>,
-    n: usize,
-    width: u32,
-    height: u32,
-) -> Vec<Point2D> {
+fn generate_initial_points(diff_img: &[Coord], n: usize, width: u32, height: u32) -> Vec<Point2D> {
     let f_width = width as Coord;
     let f_height = height as Coord;
     let mut ret = Vec::with_capacity(n);
@@ -240,7 +235,7 @@ fn main() {
         .unwrap();
 
     let mut timer = Timer::new();
-    let mut img = image::open(&Path::new(&path)).unwrap().to_rgb8();
+    let mut img = image::open(Path::new(&path)).unwrap().to_rgb8();
     let point_count = ((img.width() * img.height()) / fineness) as usize;
 
     println!("Point count: {}", point_count);
