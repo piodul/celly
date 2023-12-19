@@ -58,8 +58,7 @@ impl TriangleNode {
             tri[id] = node.split_point;
 
             // Workaround for the borrow checker
-            let tmp = node;
-            node = tmp.children[id].as_mut().unwrap().deref_mut();
+            node = node.children[id].as_mut().unwrap().deref_mut();
         }
     }
 
