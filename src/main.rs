@@ -132,8 +132,8 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
     };
 
     {
-        let calc_color = |x: u32, y: u32, factor: f64, tri_id: Option<usize>| {
-            if let Some(tri_id) = tri_id {
+        let calc_color = |x: u32, y: u32, coverage: &[(usize, f64)]| {
+            for (tri_id, factor) in coverage.iter().cloned() {
                 let cc = &mut ccinfo[tri_id];
                 let point = img.get_pixel(x, y);
                 let (mut a, mut b, mut c) = cc
@@ -179,19 +179,20 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
     }
 
     let mut pixel_id = 0;
-    let set_pixel = |x: u32, y: u32, factor: f64, tri_id: Option<usize>| {
-        let pixel = match tri_id {
-            Some(id) => {
+    let set_pixel = |x: u32, y: u32, coverage: &[(usize, f64)]| {
+        let pixel = {
+            let mut color = [0.0; 3];
+            for (id, factor) in coverage.iter().cloned() {
                 let cc = &ccinfo[id];
                 let (a, b, c) = cc
                     .bary
                     .convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
-                let r = a * cc.colors[0].0 + b * cc.colors[1].0 + c * cc.colors[2].0;
-                let g = a * cc.colors[0].1 + b * cc.colors[1].1 + c * cc.colors[2].1;
-                let b = a * cc.colors[0].2 + b * cc.colors[1].2 + c * cc.colors[2].2;
-                image::Rgb([(factor * r) as u8, (factor * g) as u8, (factor * b) as u8])
+                color[0] += (a * cc.colors[0].0 + b * cc.colors[1].0 + c * cc.colors[2].0) * factor;
+                color[1] += (a * cc.colors[0].1 + b * cc.colors[1].1 + c * cc.colors[2].1) * factor;
+                color[2] += (a * cc.colors[0].2 + b * cc.colors[1].2 + c * cc.colors[2].2) * factor;
             }
-            None => image::Rgb([0; 3]),
+            // The factors/weights are assumed to sum up to 1.0
+            image::Rgb([color[0] as u8, color[1] as u8, color[2] as u8])
         };
         img.put_pixel(x, y, pixel);
         pixel_id += 1;

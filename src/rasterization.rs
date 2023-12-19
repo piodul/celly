@@ -123,31 +123,35 @@ impl<'a> Broom<'a> {
     }
 }
 
-pub fn rasterize<F: FnMut(u32, u32, f64, Option<usize>)>(
+pub type CoveringTriangleInfo = (usize, f64);
+
+pub fn rasterize<F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
     events: &RasterizationEvents,
     width: usize,
     height: usize,
     mut f: F,
 ) {
     let mut broom = Broom::new(events);
+    let mut coverage = Vec::new();
     for y in 0..height {
         let fy = y as Coord + 0.5;
         broom.advance_to(fy);
 
-        let mut curr_tri_id = None;
+        coverage.clear();
         let mut curr_x = 0;
         for bevt in broom.get_state().iter() {
             let bound_x = bevt.get_intersection_at_y(fy);
             while curr_x < width && curr_x as Coord + 0.5 < bound_x {
-                f(curr_x as u32, y as u32, 1.0, curr_tri_id);
+                f(curr_x as u32, y as u32, &coverage);
                 curr_x += 1;
             }
 
-            curr_tri_id = Some(bevt.triangle_id);
+            coverage.clear();
+            coverage.push((bevt.triangle_id, 1.0));
         }
 
         while curr_x < width {
-            f(curr_x as u32, y as u32, 1.0, curr_tri_id);
+            f(curr_x as u32, y as u32, &coverage);
             curr_x += 1;
         }
     }
