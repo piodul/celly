@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 // Sometimes you can guarantee that no NaN's will occur,
 // and do not care about differentiating +0 and -0,
 // then this type comes to the rescue.
+#[derive(Debug)]
 pub struct FloatOrd<T>(pub T);
 
 impl<T: PartialEq> PartialEq for FloatOrd<T> {

@@ -1,40 +1,279 @@
-use std::cmp;
+use std::cmp::{self, Reverse};
 use std::cmp::{Ord, Ordering, PartialOrd};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, BinaryHeap};
 
-use crate::common_geometry::{Coord, Point2D, Triangle2D};
+use arrayvec::ArrayVec;
+
+use crate::common_geometry::{det2, Coord, Point2D, Triangle2D};
 use crate::float_ord::FloatOrd;
 
-#[derive(PartialEq, Clone, Copy, Debug)]
-struct RasterizationLineNode {
-    pub upper_pt: Point2D,
-    pub lower_pt: Point2D,
-    pub triangle_id: usize,
+fn get_intersection_at_y(upper: Point2D, lower: Point2D, y: Coord) -> Coord {
+    let progress = (y - upper.1) / (lower.1 - upper.1);
+    upper.0 + progress * (lower.0 - upper.0)
 }
 
-impl RasterizationLineNode {
-    fn get_intersection_at_y(&self, y: Coord) -> Coord {
-        let progress = (y - self.upper_pt.1) / (self.lower_pt.1 - self.upper_pt.1);
-        self.upper_pt.0 + progress * (self.lower_pt.0 - self.upper_pt.0)
+// fn get_intersection_at_x(upper: Point2D, lower: Point2D, x: Coord) -> Coord {
+//     // Dirty trick, I can't think too deeply right now
+//     get_intersection_at_y((upper.1, upper.0), (lower.1, lower.0), x)
+// }
+
+fn calculate_clipped_area(trapezoid: &Trapezoid, origin: Point2D) -> f64 {
+    // Normalize to the rect upper left corner
+    let mut v1: ArrayVec<Point2D, 16> = ArrayVec::new();
+    let mut v2: ArrayVec<Point2D, 16> = ArrayVec::new();
+
+    v1.push((trapezoid.left_x[1] - origin.0, trapezoid.lower_y - origin.1));
+    v1.push((
+        trapezoid.right_x[1] - origin.0,
+        trapezoid.lower_y - origin.1,
+    ));
+    v1.push((
+        trapezoid.right_x[0] - origin.0,
+        trapezoid.upper_y - origin.1,
+    ));
+    v1.push((trapezoid.left_x[0] - origin.0, trapezoid.upper_y - origin.1));
+
+    let mut verts = &mut v1;
+    let mut new_verts = &mut v2;
+
+    for _ in 0..4 {
+        // Clip da edges
+        let mut prev_vert = match verts.last().cloned() {
+            Some(v) => v,
+            None => return 0.0, // Completely clipped
+        };
+        for curr_vert in verts.iter() {
+            let prev_clipped = prev_vert.1 < 0.0;
+            let curr_clipped = curr_vert.1 < 0.0;
+            match (prev_clipped, curr_clipped) {
+                (true, true) => {
+                    // Do nothing, the whole edge is clipped
+                }
+                (true, false) => {
+                    let x = get_intersection_at_y(*curr_vert, prev_vert, 0.0);
+                    new_verts.push((x, 0.0));
+                    new_verts.push(*curr_vert);
+                }
+                (false, true) => {
+                    let x = get_intersection_at_y(*curr_vert, prev_vert, 0.0);
+                    new_verts.push((x, 0.0));
+                }
+                _ => {
+                    new_verts.push(*curr_vert);
+                }
+            }
+
+            prev_vert = *curr_vert;
+        }
+
+        // Rotate by 90 degrees
+        for v in new_verts.iter_mut() {
+            *v = (1.0 - v.1, v.0);
+        }
+
+        std::mem::swap(&mut verts, &mut new_verts);
+        new_verts.clear();
     }
+
+    // Finally, calculate the area
+    let mut area = 0.0;
+    let mut prev_vert = match verts.last().cloned() {
+        Some(v) => v,
+        None => return 0.0,
+    };
+    for curr_vert in verts.iter() {
+        area += det2(curr_vert.0, curr_vert.1, prev_vert.0, prev_vert.1);
+        prev_vert = *curr_vert;
+    }
+    // println!("area: {}", area * 0.5);
+    area * 0.5
 }
 
-impl Eq for RasterizationLineNode {}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum RasterizationEventType {
+    End,
+    Begin,
+}
 
-impl PartialOrd for RasterizationLineNode {
-    fn partial_cmp(&self, other: &RasterizationLineNode) -> Option<Ordering> {
+#[derive(PartialEq, Clone, Debug)]
+struct Trapezoid {
+    upper_y: Coord,
+    lower_y: Coord,
+    left_x: [Coord; 2],
+    right_x: [Coord; 2],
+}
+
+impl Trapezoid {
+    fn get_left_intersection_at_y(&self, y: Coord) -> Coord {
+        get_intersection_at_y(
+            (self.left_x[0], self.upper_y),
+            (self.left_x[1], self.lower_y),
+            y,
+        )
+    }
+
+    fn get_right_intersection_at_y(&self, y: Coord) -> Coord {
+        get_intersection_at_y(
+            (self.right_x[0], self.upper_y),
+            (self.right_x[1], self.lower_y),
+            y,
+        )
+    }
+
+    fn validate(&self) {
+        debug_assert!(self.upper_y <= self.lower_y);
+        debug_assert!(self.left_x[0] <= self.right_x[0]);
+        debug_assert!(self.left_x[1] <= self.right_x[1]);
+    }
+
+    // // Perhaps it should be more efficient than the clipping method,
+    // // but it does not account for some special cases right now,
+    // // so I'm using a real clipping algorithm for the time being.
+    // fn calculate_area_clipped_to_unit_square(&self, origin: Point2D) -> f64 {
+    //     let mut ret = self.clone();
+    //     ret.upper_y -= origin.1;
+    //     ret.lower_y -= origin.1;
+    //     if ret.lower_y >= 1.0 || ret.upper_y <= 0.0 {
+    //         // No intersection, the trapezoid is either above or below
+    //         // the unit square
+    //         return 0.0;
+    //     }
+
+    //     ret.left_x[0] -= origin.0;
+    //     ret.left_x[1] -= origin.0;
+    //     ret.right_x[0] -= origin.0;
+    //     ret.right_x[1] -= origin.0;
+
+    //     // Shave off the parts above y = 0.0 and below y = 1.0
+    //     if ret.upper_y < 0.0 {
+    //         ret.left_x[0] = ret.get_left_intersection_at_y(0.0);
+    //         ret.right_x[0] = ret.get_right_intersection_at_y(0.0);
+    //         ret.upper_y = 0.0;
+    //     }
+    //     if ret.lower_y > 1.0 {
+    //         ret.left_x[1] = ret.get_left_intersection_at_y(1.0);
+    //         ret.right_x[1] = ret.get_right_intersection_at_y(1.0);
+    //         ret.lower_y = 1.0;
+    //     }
+
+    //     let compute_area_to_the_right = |x: Coord| -> f64 {
+    //         println!(" compute_area_to_the_right: begin {x}");
+
+    //         let mut a = 0.0;
+
+    //         // Right "wing"
+    //         match (ret.right_x[0] <= x, ret.right_x[1] <= x) {
+    //             (true, true) => {
+    //                 // Everything is to the left
+    //                 println!("  right: everything to the left - return");
+    //                 return a;
+    //             }
+    //             (true, false) => {
+    //                 let midpt = get_intersection_at_x(
+    //                     (ret.right_x[0], ret.upper_y),
+    //                     (ret.right_x[1], ret.lower_y),
+    //                     x,
+    //                 );
+    //                 a += 0.5 * (1.0 - midpt) * (ret.right_x[1] - x);
+    //                 println!("  right: true, false, increase by {}", a);
+    //                 return a;
+    //             }
+    //             (false, true) => {
+    //                 let midpt = get_intersection_at_x(
+    //                     (ret.right_x[0], ret.upper_y),
+    //                     (ret.right_x[1], ret.lower_y),
+    //                     x,
+    //                 );
+    //                 a += 0.5 * midpt * (ret.right_x[0] - x);
+    //                 println!("  right: false, true, increase by {}", a);
+    //                 return a;
+    //             }
+    //             (false, false) => {
+    //                 a += 0.5 * (ret.right_x[1] - ret.right_x[0]).abs(); // * 1.0 (height)
+    //                 println!("  right: false, false, increase by {}", a);
+    //             }
+    //         }
+
+    //         // The rectangle part
+    //         let rect_left = std::cmp::max(FloatOrd(ret.left_x[0]), FloatOrd(ret.left_x[1])).0;
+    //         let rect_right = std::cmp::min(FloatOrd(ret.right_x[0]), FloatOrd(ret.right_x[1])).0;
+    //         if rect_left <= x {
+    //             println!("  center: rectangle intersects, area {}", rect_right - x);
+    //             a += rect_right - x; // * 1.0 (height)
+    //             return a;
+    //         }
+    //         println!(
+    //             "  center: rectangle does not intersect, area {}",
+    //             rect_right - rect_left
+    //         );
+    //         a += rect_right - rect_left;
+
+    //         // Left "wing"
+    //         match (ret.left_x[0] <= x, ret.left_x[1] <= x) {
+    //             (true, true) => {
+    //                 // Everything is to the left (not very likely but can happen)
+    //                 println!("  left: everything to the left - return");
+    //                 return a;
+    //             }
+    //             (true, false) => {
+    //                 let midpt = get_intersection_at_x(
+    //                     (ret.left_x[0], ret.upper_y),
+    //                     (ret.left_x[1], ret.lower_y),
+    //                     x,
+    //                 );
+    //                 let incr = (ret.left_x[1] - x) - 0.5 * (ret.left_x[1] - x) * (1.0 - midpt);
+    //                 a += incr;
+    //                 println!("  left: true, false, increase by {}", incr);
+    //                 return a;
+    //             }
+    //             (false, true) => {
+    //                 let midpt = get_intersection_at_x(
+    //                     (ret.left_x[0], ret.upper_y),
+    //                     (ret.left_x[1], ret.lower_y),
+    //                     x,
+    //                 );
+    //                 let incr = (ret.left_x[0] - x) - 0.5 * (ret.left_x[0] - x) * midpt;
+    //                 a += incr;
+    //                 println!("  left: false, true, increase by {}", incr);
+    //                 return a;
+    //             }
+    //             (false, false) => {
+    //                 let incr = 0.5 * (ret.left_x[1] - ret.left_x[0]).abs(); // * 1.0 (height)
+    //                 a += incr;
+    //                 println!("  left: false, false, increase by {}", incr);
+    //             }
+    //         }
+
+    //         a
+    //     };
+
+    //     let trap = &ret;
+
+    //     println!("starting computation");
+    //     let ret = compute_area_to_the_right(0.0) - compute_area_to_the_right(1.0);
+    //     if ret < 0.0 || ret > 1.0 {
+    //         panic!("{ret}, {:?}", trap);
+    //     }
+    //     ret
+    // }
+}
+
+impl Eq for Trapezoid {}
+
+impl PartialOrd for Trapezoid {
+    fn partial_cmp(&self, other: &Trapezoid) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for RasterizationLineNode {
-    fn cmp(&self, other: &RasterizationLineNode) -> Ordering {
-        let p1 = cmp::max(FloatOrd(self.upper_pt.1), FloatOrd(other.upper_pt.1)).0;
-        let p2 = cmp::min(FloatOrd(self.lower_pt.1), FloatOrd(other.lower_pt.1)).0;
+impl Ord for Trapezoid {
+    fn cmp(&self, other: &Trapezoid) -> Ordering {
+        let p1 = cmp::max(FloatOrd(self.upper_y), FloatOrd(other.upper_y)).0;
+        let p2 = cmp::min(FloatOrd(self.lower_y), FloatOrd(other.lower_y)).0;
         let midpt = 0.5 * (p1 + p2);
 
-        let l_x = self.get_intersection_at_y(midpt);
-        let r_x = other.get_intersection_at_y(midpt);
+        let l_x = self.get_left_intersection_at_y(midpt);
+        let r_x = other.get_left_intersection_at_y(midpt);
 
         if l_x < r_x {
             Ordering::Less
@@ -46,54 +285,131 @@ impl Ord for RasterizationLineNode {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum RasterizationEventType {
-    End,
-    Begin,
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+enum TrapezoidKind {
+    Upper,
+    Lower,
 }
 
-#[derive(Clone, Copy, Debug)]
 struct RasterizationEvent {
-    pub etype: RasterizationEventType,
-    pub time: Coord,
-    pub node: RasterizationLineNode,
+    etype: RasterizationEventType,
+    tkind: TrapezoidKind,
+    trapezoid: Trapezoid,
+    triangle_id: usize,
+}
+
+impl RasterizationEvent {
+    fn time(&self) -> f64 {
+        match self.etype {
+            RasterizationEventType::End => self.trapezoid.lower_y,
+            RasterizationEventType::Begin => self.trapezoid.upper_y,
+        }
+    }
 }
 
 pub struct RasterizationEvents(Vec<RasterizationEvent>);
 
-pub fn prepare_events(tris: &[Triangle2D]) -> RasterizationEvents {
+pub fn prepare_aa_events(tris: &[Triangle2D]) -> RasterizationEvents {
     let mut events = Vec::new();
     for (id, tri) in tris.iter().enumerate() {
-        let tri_edges = [(tri[1], tri[0]), (tri[2], tri[1]), (tri[0], tri[2])];
-        for (a, b) in tri_edges.iter() {
-            if a.1 < b.1 {
-                let node = RasterizationLineNode {
-                    upper_pt: *a,
-                    lower_pt: *b,
-                    triangle_id: id,
-                };
+        // We need to divide the triangle into two triangles which have one
+        // side that is parallel to the X axis
+        let mut tri = *tri;
+        tri.sort_by_key(|p| (FloatOrd(p.1), FloatOrd(p.0)));
 
-                events.push(RasterizationEvent {
-                    etype: RasterizationEventType::Begin,
-                    time: a.1,
-                    node,
-                });
-                events.push(RasterizationEvent {
-                    etype: RasterizationEventType::End,
-                    time: b.1,
-                    node,
-                });
+        let mut generate_events = |tkind: TrapezoidKind, trapezoid: &Trapezoid| {
+            trapezoid.validate();
+
+            events.push(RasterizationEvent {
+                etype: RasterizationEventType::Begin,
+                tkind,
+                trapezoid: trapezoid.clone(),
+                triangle_id: id,
+            });
+            events.push(RasterizationEvent {
+                etype: RasterizationEventType::End,
+                tkind,
+                trapezoid: trapezoid.clone(),
+                triangle_id: id,
+            });
+        };
+
+        if tri[0].1 == tri[1].1 {
+            // The upper side is already parallel
+            // tri[0] has lower X than tri[1], therefore we use it
+            generate_events(
+                TrapezoidKind::Lower,
+                &Trapezoid {
+                    upper_y: tri[0].1,
+                    lower_y: tri[2].1,
+                    left_x: [tri[0].0, tri[2].0],
+                    right_x: [tri[1].0, tri[2].0],
+                },
+            );
+        } else if tri[1].1 == tri[2].1 {
+            // The lower side is already parallel
+            generate_events(
+                TrapezoidKind::Upper,
+                &Trapezoid {
+                    upper_y: tri[0].1,
+                    lower_y: tri[2].1,
+                    left_x: [tri[0].0, tri[1].0],
+                    right_x: [tri[0].0, tri[2].0],
+                },
+            );
+        } else {
+            let split_x = get_intersection_at_y(tri[0], tri[2], tri[1].1);
+
+            // Is tri[1] on the left or right side of the tri[0] -> tri[2] line?
+            if split_x <= tri[1].0 {
+                generate_events(
+                    TrapezoidKind::Upper,
+                    &Trapezoid {
+                        upper_y: tri[0].1,
+                        lower_y: tri[1].1,
+                        left_x: [tri[0].0, split_x],
+                        right_x: [tri[0].0, tri[1].0],
+                    },
+                );
+                generate_events(
+                    TrapezoidKind::Lower,
+                    &Trapezoid {
+                        upper_y: tri[1].1,
+                        lower_y: tri[2].1,
+                        left_x: [split_x, tri[2].0],
+                        right_x: [tri[1].0, tri[2].0],
+                    },
+                );
+            } else {
+                generate_events(
+                    TrapezoidKind::Upper,
+                    &Trapezoid {
+                        upper_y: tri[0].1,
+                        lower_y: tri[1].1,
+                        left_x: [tri[0].0, tri[1].0],
+                        right_x: [tri[0].0, split_x],
+                    },
+                );
+                generate_events(
+                    TrapezoidKind::Lower,
+                    &Trapezoid {
+                        upper_y: tri[1].1,
+                        lower_y: tri[2].1,
+                        left_x: [tri[1].0, tri[2].0],
+                        right_x: [split_x, tri[2].0],
+                    },
+                );
             }
         }
     }
 
-    events.sort_unstable_by_key(|e| (FloatOrd(e.time), e.etype));
+    events.sort_unstable_by_key(|e| (FloatOrd(e.time()), e.etype));
     RasterizationEvents(events)
 }
 
 struct Broom<'a> {
     events: &'a [RasterizationEvent],
-    broom_state: BTreeSet<RasterizationLineNode>,
+    broom_state: BTreeSet<(&'a Trapezoid, usize, TrapezoidKind)>,
 }
 
 impl<'a> Broom<'a> {
@@ -104,55 +420,193 @@ impl<'a> Broom<'a> {
         }
     }
 
-    fn advance_to(&mut self, position: Coord) {
+    // Returns the events that were processed.
+    fn advance_to(&mut self, position: Coord) -> &'a [RasterizationEvent] {
+        let old_events = self.events;
         while let Some((curr_event, tail)) = self.events.split_first() {
-            if curr_event.time >= position {
-                return;
+            if curr_event.time() >= position {
+                break;
             }
             self.events = tail;
 
             match curr_event.etype {
-                RasterizationEventType::Begin => self.broom_state.insert(curr_event.node),
-                RasterizationEventType::End => self.broom_state.remove(&curr_event.node),
+                RasterizationEventType::Begin => self.broom_state.insert((
+                    &curr_event.trapezoid,
+                    curr_event.triangle_id,
+                    curr_event.tkind,
+                )),
+                RasterizationEventType::End => self.broom_state.remove(&(
+                    &curr_event.trapezoid,
+                    curr_event.triangle_id,
+                    curr_event.tkind,
+                )),
             };
         }
+        &old_events[..old_events.len() - self.events.len()]
     }
 
-    fn get_state(&self) -> &BTreeSet<RasterizationLineNode> {
+    fn get_state(&self) -> &BTreeSet<(&'a Trapezoid, usize, TrapezoidKind)> {
         &self.broom_state
     }
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
+struct ScanlineEvent<'a> {
+    time: Reverse<FloatOrd<f64>>,
+    etype: RasterizationEventType,
+    tkind: TrapezoidKind,
+    triangle_id: usize,
+    trapezoid: &'a Trapezoid,
+}
+
 pub type CoveringTriangleInfo = (usize, f64);
 
-pub fn rasterize<F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
-    events: &RasterizationEvents,
+pub fn rasterize<'a, F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
+    events: &'a RasterizationEvents,
     width: usize,
     height: usize,
     mut f: F,
 ) {
-    let mut broom = Broom::new(events);
-    let mut coverage = Vec::new();
-    for y in 0..height {
-        let fy = y as Coord + 0.5;
-        broom.advance_to(fy);
+    assert_ne!(width, 0);
+    assert_ne!(height, 0);
 
-        coverage.clear();
+    let mut broom = Broom::new(events);
+    broom.advance_to(0.0); // Clear events before y = 0.0
+
+    // TODO: Just sort the events, no need to use the heap as we are
+    // not appending anything dynamically
+    let mut scanline_events: BinaryHeap<ScanlineEvent> = BinaryHeap::new();
+    let mut coverage_info: Vec<(usize, TrapezoidKind, &'a Trapezoid)> = Vec::new();
+
+    let mut coverage_for_fn: Vec<CoveringTriangleInfo> = Vec::new();
+
+    for y in 0..height {
+        let fy = y as Coord;
+        scanline_events.clear();
+        coverage_info.clear();
+
+        // Update the broom
+        let broom_events = broom.advance_to(fy + 1.0);
+
+        let mut push_events =
+            |tkind: TrapezoidKind, trapezoid: &'a Trapezoid, triangle_id: usize, lower_y: Coord| {
+                let start_time = if trapezoid.left_x[0] < trapezoid.left_x[1] {
+                    trapezoid.get_left_intersection_at_y(fy)
+                } else {
+                    trapezoid.get_left_intersection_at_y(lower_y)
+                };
+                let end_time = if trapezoid.right_x[0] > trapezoid.right_x[1] {
+                    trapezoid.get_right_intersection_at_y(fy)
+                } else {
+                    trapezoid.get_right_intersection_at_y(lower_y)
+                };
+                scanline_events.push(ScanlineEvent {
+                    time: Reverse(FloatOrd(start_time)),
+                    etype: RasterizationEventType::Begin,
+                    tkind,
+                    triangle_id,
+                    trapezoid,
+                });
+                scanline_events.push(ScanlineEvent {
+                    time: Reverse(FloatOrd(end_time)),
+                    etype: RasterizationEventType::End,
+                    tkind,
+                    triangle_id,
+                    trapezoid,
+                });
+            };
+
+        // Add events based on the items which left the broom (including those
+        // that were inserted and immediately removed)
+        for e in broom_events {
+            match e.etype {
+                RasterizationEventType::End => {
+                    push_events(e.tkind, &e.trapezoid, e.triangle_id, e.trapezoid.lower_y);
+                }
+                RasterizationEventType::Begin => {} // Nothing
+            }
+        }
+
+        // Add events based on the state of the broom
+        for e in broom.get_state().iter() {
+            push_events(e.2, &e.0, e.1, fy + 1.0);
+        }
+
         let mut curr_x = 0;
-        for bevt in broom.get_state().iter() {
-            let bound_x = bevt.get_intersection_at_y(fy);
-            while curr_x < width && curr_x as Coord + 0.5 < bound_x {
-                f(curr_x as u32, y as u32, &coverage);
-                curr_x += 1;
+        'scanline_events: while let Some(evt) = scanline_events.pop() {
+            // Rasterize
+            let bound_x = evt.time.0 .0;
+            match coverage_info.as_slice() {
+                [(t, _, _)] => {
+                    // Very common case: only one triangle covers the pixel.
+                    // The triangles that we rasterize are disjoint
+                    // and cover the whole image, so we can assume that
+                    // the whole pixel is covered.
+                    coverage_for_fn.clear();
+                    coverage_for_fn.push((*t, 1.0));
+                }
+                [(t1, _, _), (t2, _, _)] if t1 == t2 => {
+                    // Similar situation as above, but happens if we have
+                    // two trapezoids from the same triangle.
+                    coverage_for_fn.clear();
+                    coverage_for_fn.push((*t1, 1.0));
+                }
+                _ => {
+                    // Rasterize, but update the coverage on each step
+                    while (curr_x as Coord) < bound_x {
+                        // Update coverage
+                        coverage_for_fn.clear();
+                        for (tri, _, trapezoid) in coverage_info.iter() {
+                            let coverage = calculate_clipped_area(trapezoid, (curr_x as Coord, fy));
+                            coverage_for_fn.push((*tri, coverage));
+                        }
+
+                        // Callback
+                        f(curr_x as u32, y as u32, &coverage_for_fn);
+                        curr_x += 1;
+
+                        // Early exit if we reached the end of the line
+                        if curr_x >= width {
+                            break 'scanline_events;
+                        }
+                    }
+                }
+            }
+            if coverage_for_fn.len() == 1 {
+                // Rasterize. No need to update coverage on each iteration.
+                while (curr_x as Coord) < bound_x {
+                    // Callback
+                    f(curr_x as u32, y as u32, &coverage_for_fn);
+                    curr_x += 1;
+
+                    // Early exit if we reached the end of the line
+                    if curr_x >= width {
+                        break 'scanline_events;
+                    }
+                }
             }
 
-            coverage.clear();
-            coverage.push((bevt.triangle_id, 1.0));
+            // Process the next event
+            match evt.etype {
+                RasterizationEventType::End => {
+                    let idx = coverage_info
+                        .iter()
+                        .enumerate()
+                        .find_map(|(idx, (t, tk, _))| {
+                            (*t == evt.triangle_id && *tk == evt.tkind).then_some(idx)
+                        })
+                        .expect("tried to remove a triangle that is not being considered");
+                    coverage_info.swap_remove(idx);
+                }
+                RasterizationEventType::Begin => {
+                    coverage_info.push((evt.triangle_id, evt.tkind, evt.trapezoid));
+                }
+            }
         }
 
-        while curr_x < width {
-            f(curr_x as u32, y as u32, &coverage);
-            curr_x += 1;
-        }
+        // The triangles are supposed to cover the whole area and we have events
+        // both for the left and right triangle sides, so we should have
+        // covered the whole line
+        assert!(curr_x == width);
     }
 }

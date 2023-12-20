@@ -116,7 +116,7 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
     let im_width = img.width() as usize;
     let im_height = img.height() as usize;
 
-    let events = rasterization::prepare_events(triangulation);
+    let events = rasterization::prepare_aa_events(triangulation);
 
     // Calculate barycentric converters and colors
     let mut ccinfo = {
@@ -181,6 +181,13 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
     let mut pixel_id = 0;
     let set_pixel = |x: u32, y: u32, coverage: &[(usize, f64)]| {
         let pixel = {
+            // let csum = coverage.iter().map(|(_, c)| *c).sum::<f64>();
+            // if csum < 0.99 || csum > 1.01 {
+            //     img.put_pixel(x, y, image::Rgb([255, 0, 0]));
+            //     pixel_id += 1;
+            //     return;
+            // }
+
             let mut color = [0.0; 3];
             for (id, factor) in coverage.iter().cloned() {
                 let cc = &ccinfo[id];
@@ -194,6 +201,12 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
             // The factors/weights are assumed to sum up to 1.0
             image::Rgb([color[0] as u8, color[1] as u8, color[2] as u8])
         };
+        // let pixel = if coverage.len() == 1 {
+        //     image::Rgb([0, 255, 0])
+        // } else {
+        //     image::Rgb([255, 0, 0])
+        // };
+        // let pixel = image::Rgb([(10 * coverage.len()) as u8, 0, 0]);
         img.put_pixel(x, y, pixel);
         pixel_id += 1;
     };
