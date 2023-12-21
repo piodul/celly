@@ -112,11 +112,16 @@ fn compute_differential_image(img: &image::RgbImage) -> Vec<Coord> {
     ret3
 }
 
-fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triangle2D>) {
+fn generate_delaunay_image(
+    timer: &mut Timer,
+    img: &mut image::RgbImage,
+    triangulation: &Vec<Triangle2D>,
+) {
     let im_width = img.width() as usize;
     let im_height = img.height() as usize;
 
     let events = rasterization::prepare_aa_events(triangulation);
+    timer.measure("Preparing events");
 
     // Calculate barycentric converters and colors
     let mut ccinfo = {
@@ -132,6 +137,7 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
     };
 
     let computed = rasterization::rasterize(&events, im_width, im_height);
+    timer.measure("Computing coverage info for rasterization");
 
     {
         computed.replay(|x: u32, y: u32, coverage: &[(usize, f64)]| {
@@ -158,6 +164,7 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
                 cc.weights[2] += c;
             }
         });
+        timer.measure("Computing triangle colors");
     }
 
     // Scale the colors
@@ -211,6 +218,7 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
         img.put_pixel(x, y, pixel);
         pixel_id += 1;
     });
+    timer.measure("Generating image");
 }
 
 fn duration_as_seconds(d: Duration) -> f64 {
@@ -267,8 +275,7 @@ fn main() {
     );
     timer.measure("Calculating delaunay triangulation");
 
-    generate_delaunay_image(&mut img, &tris);
-    timer.measure("Generating delaunay image");
+    generate_delaunay_image(&mut timer, &mut img, &tris);
 
     let new_path = String::from(path.to_string_lossy()) + ".cellied.png";
     img.save(OsString::from(new_path)).unwrap();
