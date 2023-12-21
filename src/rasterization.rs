@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use std::cmp::{self, Ord, Ordering, PartialOrd};
 use std::collections::BTreeSet;
 
@@ -406,6 +407,7 @@ pub fn prepare_aa_events(tris: &[Triangle2D]) -> RasterizationEvents {
     RasterizationEvents(events)
 }
 
+#[derive(Clone)]
 struct Broom<'a> {
     events: &'a [RasterizationEvent],
     broom_state: BTreeSet<(&'a Trapezoid, usize, TrapezoidKind)>,
@@ -460,29 +462,32 @@ struct ScanlineEvent<'a> {
 
 pub type CoveringTriangleInfo = (usize, f64);
 
+type CoverageChunk = (usize, Vec<usize>, Vec<CoveringTriangleInfo>);
+
 pub struct ComputedCoverage {
     width: usize,
-    height: usize,
-    sample_counts: Vec<usize>,
-    samples: Vec<CoveringTriangleInfo>,
+    chunks: Vec<CoverageChunk>,
 }
 
 impl ComputedCoverage {
     pub fn replay(&self, mut f: impl FnMut(u32, u32, &[CoveringTriangleInfo])) {
-        assert_eq!(self.width * self.height, self.sample_counts.len());
+        let mut y = 0;
+        for (row_count, sample_counts, samples) in self.chunks.iter() {
+            assert_eq!(row_count * self.width, sample_counts.len());
 
-        let mut curr_samples = self.samples.as_slice();
-
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let scount = self.sample_counts[y * self.width + x];
-                let (head_samples, tail_samples) = curr_samples.split_at(scount);
-                f(x as u32, y as u32, head_samples);
-                curr_samples = tail_samples;
+            let mut curr_samples = samples.as_slice();
+            for row in 0..*row_count {
+                for x in 0..self.width {
+                    let scount = sample_counts[row * self.width + x];
+                    let (head_samples, tail_samples) = curr_samples.split_at(scount);
+                    f(x as u32, y as u32, head_samples);
+                    curr_samples = tail_samples;
+                }
+                y += 1;
             }
-        }
 
-        assert_eq!(curr_samples.len(), 0);
+            assert_eq!(curr_samples.len(), 0);
+        }
     }
 }
 
@@ -491,19 +496,51 @@ pub fn rasterize<'a>(
     width: usize,
     height: usize,
 ) -> ComputedCoverage {
+    let mut broom = Broom::new(events);
+
+    // Split the image into horizontal stripes and process in parallel
+    const MIN_PIXEL_COUNT_PER_CHUNK: usize = 4096;
+    let rows_per_stripe = (MIN_PIXEL_COUNT_PER_CHUNK + width - 1) / width;
+
+    let mut y = 0;
+    let work_items = std::iter::from_fn(|| {
+        if y >= height {
+            return None;
+        }
+
+        let start_y = y;
+        y += rows_per_stripe;
+        let end_y = std::cmp::min(y, height);
+
+        broom.advance_to(start_y as Coord);
+        Some((broom.clone(), start_y, end_y))
+    })
+    .collect::<Vec<_>>();
+
+    let chunks = work_items
+        .into_par_iter()
+        .map(|(mut b, start_y, end_y)| rasterize_scanlines(&mut b, width, start_y, end_y - start_y))
+        .collect();
+
+    ComputedCoverage { width, chunks }
+}
+
+fn rasterize_scanlines<'a>(
+    broom: &'a mut Broom,
+    width: usize,
+    y_offset: usize,
+    height: usize,
+) -> CoverageChunk {
     assert_ne!(width, 0);
     assert_ne!(height, 0);
-
-    let mut broom = Broom::new(events);
-    broom.advance_to(0.0); // Clear events before y = 0.0
-
-    let mut scanline_events: Vec<ScanlineEvent> = Vec::new();
-    let mut coverage_info: Vec<(usize, TrapezoidKind, &'a Trapezoid)> = Vec::new();
 
     let mut sample_counts = Vec::with_capacity(width * height);
     let mut samples = Vec::new();
 
-    for y in 0..height {
+    let mut scanline_events: Vec<ScanlineEvent> = Vec::new();
+    let mut coverage_info: Vec<(usize, TrapezoidKind, &'a Trapezoid)> = Vec::new();
+
+    for y in y_offset..y_offset + height {
         let fy = y as Coord;
         scanline_events.clear();
         coverage_info.clear();
@@ -626,12 +663,7 @@ pub fn rasterize<'a>(
         assert_eq!(curr_x, width);
     }
 
-    ComputedCoverage {
-        width,
-        height,
-        sample_counts,
-        samples,
-    }
+    (height, sample_counts, samples)
 }
 
 #[allow(dead_code)]
