@@ -131,8 +131,10 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
         ccinfo
     };
 
+    let computed = rasterization::rasterize(&events, im_width, im_height);
+
     {
-        let calc_color = |x: u32, y: u32, coverage: &[(usize, f64)]| {
+        computed.replay(|x: u32, y: u32, coverage: &[(usize, f64)]| {
             for (tri_id, factor) in coverage.iter().cloned() {
                 let cc = &mut ccinfo[tri_id];
                 let point = img.get_pixel(x, y);
@@ -155,8 +157,7 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
                 cc.weights[1] += b;
                 cc.weights[2] += c;
             }
-        };
-        rasterization::rasterize(&events, im_width, im_height, calc_color);
+        });
     }
 
     // Scale the colors
@@ -179,7 +180,7 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
     }
 
     let mut pixel_id = 0;
-    let set_pixel = |x: u32, y: u32, coverage: &[(usize, f64)]| {
+    computed.replay(|x: u32, y: u32, coverage: &[(usize, f64)]| {
         let pixel = {
             // let csum = coverage.iter().map(|(_, c)| *c).sum::<f64>();
             // if csum < 0.99 || csum > 1.01 {
@@ -209,9 +210,7 @@ fn generate_delaunay_image(img: &mut image::RgbImage, triangulation: &Vec<Triang
         // let pixel = image::Rgb([(10 * coverage.len()) as u8, 0, 0]);
         img.put_pixel(x, y, pixel);
         pixel_id += 1;
-    };
-
-    rasterization::rasterize(&events, im_width, im_height, set_pixel);
+    });
 }
 
 fn duration_as_seconds(d: Duration) -> f64 {

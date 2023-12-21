@@ -1,6 +1,5 @@
-use std::cmp::{self, Reverse};
-use std::cmp::{Ord, Ordering, PartialOrd};
-use std::collections::{BTreeSet, BinaryHeap};
+use std::cmp::{self, Ord, Ordering, PartialOrd};
+use std::collections::BTreeSet;
 
 use arrayvec::ArrayVec;
 
@@ -450,9 +449,9 @@ impl<'a> Broom<'a> {
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Debug)]
 struct ScanlineEvent<'a> {
-    time: Reverse<FloatOrd<f64>>,
+    time: f64,
     etype: RasterizationEventType,
     tkind: TrapezoidKind,
     triangle_id: usize,
@@ -461,27 +460,48 @@ struct ScanlineEvent<'a> {
 
 pub type CoveringTriangleInfo = (usize, f64);
 
-pub fn rasterize<'a, F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
+pub struct ComputedCoverage {
+    width: usize,
+    height: usize,
+    sample_counts: Vec<usize>,
+    samples: Vec<CoveringTriangleInfo>,
+}
+
+impl ComputedCoverage {
+    pub fn replay(&self, mut f: impl FnMut(u32, u32, &[CoveringTriangleInfo])) {
+        assert_eq!(self.width * self.height, self.sample_counts.len());
+
+        let mut curr_samples = self.samples.as_slice();
+
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let scount = self.sample_counts[y * self.width + x];
+                let (head_samples, tail_samples) = curr_samples.split_at(scount);
+                f(x as u32, y as u32, head_samples);
+                curr_samples = tail_samples;
+            }
+        }
+
+        assert_eq!(curr_samples.len(), 0);
+    }
+}
+
+pub fn rasterize<'a>(
     events: &'a RasterizationEvents,
     width: usize,
     height: usize,
-    mut f: F,
-) {
+) -> ComputedCoverage {
     assert_ne!(width, 0);
     assert_ne!(height, 0);
 
     let mut broom = Broom::new(events);
     broom.advance_to(0.0); // Clear events before y = 0.0
 
-    // TODO: Just sort the events, no need to use the heap as we are
-    // not appending anything dynamically
-    let mut scanline_events: BinaryHeap<ScanlineEvent> = BinaryHeap::new();
+    let mut scanline_events: Vec<ScanlineEvent> = Vec::new();
     let mut coverage_info: Vec<(usize, TrapezoidKind, &'a Trapezoid)> = Vec::new();
 
-    let mut coverage_for_fn: Vec<CoveringTriangleInfo> = Vec::new();
-
-    // const DUMP_X: usize = 765;
-    // const DUMP_Y: usize = 1026;
+    let mut sample_counts = Vec::with_capacity(width * height);
+    let mut samples = Vec::new();
 
     for y in 0..height {
         let fy = y as Coord;
@@ -504,14 +524,14 @@ pub fn rasterize<'a, F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
                     trapezoid.get_right_intersection_at_y(lower_y)
                 };
                 scanline_events.push(ScanlineEvent {
-                    time: Reverse(FloatOrd(start_time)),
+                    time: start_time,
                     etype: RasterizationEventType::Begin,
                     tkind,
                     triangle_id,
                     trapezoid,
                 });
                 scanline_events.push(ScanlineEvent {
-                    time: Reverse(FloatOrd(end_time)),
+                    time: end_time,
                     etype: RasterizationEventType::End,
                     tkind,
                     triangle_id,
@@ -535,72 +555,51 @@ pub fn rasterize<'a, F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
             push_events(e.2, &e.0, e.1, fy + 1.0);
         }
 
+        scanline_events.sort_unstable_by_key(|e| FloatOrd(e.time));
+
         let mut curr_x = 0usize;
-        'scanline_events: while let Some(evt) = scanline_events.pop() {
+        'scanline_events: for evt in scanline_events.iter() {
             // Rasterize
-            let bound_x = evt.time.0 .0;
+            let bound_x = evt.time;
+            let bound_ux = cmp::min(bound_x.ceil() as usize, width);
+            let bound_ux = cmp::max(bound_ux, curr_x);
+            let segment_length = bound_ux - curr_x;
             match coverage_info.as_slice() {
                 [(t, _, _)] => {
                     // Very common case: only one triangle covers the pixel.
                     // The triangles that we rasterize are disjoint
                     // and cover the whole image, so we can assume that
                     // the whole pixel is covered.
-                    coverage_for_fn.clear();
-                    coverage_for_fn.push((*t, 1.0));
+                    sample_counts.extend(std::iter::repeat(1).take(segment_length));
+                    samples.extend(std::iter::repeat((*t, 1.0)).take(segment_length));
+                    curr_x = bound_ux;
                 }
                 [(t1, _, _), (t2, _, _)] if t1 == t2 => {
                     // Similar situation as above, but happens if we have
                     // two trapezoids from the same triangle.
-                    coverage_for_fn.clear();
-                    coverage_for_fn.push((*t1, 1.0));
+                    sample_counts.extend(std::iter::repeat(1).take(segment_length));
+                    samples.extend(std::iter::repeat((*t1, 1.0)).take(segment_length));
+                    curr_x = bound_ux;
                 }
                 _ => {
                     // Rasterize, but update the coverage on each step
-                    while (curr_x as Coord) < bound_x {
+                    sample_counts
+                        .extend(std::iter::repeat(coverage_info.len()).take(segment_length));
+                    while curr_x < bound_ux {
                         // Update coverage
-                        coverage_for_fn.clear();
                         for (tri, _, trapezoid) in coverage_info.iter() {
                             let coverage = calculate_clipped_area(trapezoid, (curr_x as Coord, fy));
-                            coverage_for_fn.push((*tri, coverage));
+                            samples.push((*tri, coverage));
                         }
 
-                        // if curr_x == DUMP_X && y == DUMP_Y {
-                        //     dump_obj(
-                        //         coverage_info.iter().map(|x| x.2.clone()),
-                        //         (curr_x as Coord, fy),
-                        //     );
-                        // }
-
-                        // Callback
-                        f(curr_x as u32, y as u32, &coverage_for_fn);
                         curr_x += 1;
-
-                        // Early exit if we reached the end of the line
-                        if curr_x >= width {
-                            break 'scanline_events;
-                        }
                     }
                 }
             }
-            if coverage_for_fn.len() == 1 {
-                // Rasterize. No need to update coverage on each iteration.
-                while (curr_x as Coord) < bound_x {
-                    // if curr_x == DUMP_X && y == DUMP_Y {
-                    //     dump_obj(
-                    //         coverage_info.iter().map(|x| x.2.clone()),
-                    //         (curr_x as Coord, fy),
-                    //     );
-                    // }
 
-                    // Callback
-                    f(curr_x as u32, y as u32, &coverage_for_fn);
-                    curr_x += 1;
-
-                    // Early exit if we reached the end of the line
-                    if curr_x >= width {
-                        break 'scanline_events;
-                    }
-                }
+            // Early exit if we reached the end of the line
+            if curr_x >= width {
+                break 'scanline_events;
             }
 
             // Process the next event
@@ -624,7 +623,14 @@ pub fn rasterize<'a, F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
         // The triangles are supposed to cover the whole area and we have events
         // both for the left and right triangle sides, so we should have
         // covered the whole line
-        assert!(curr_x == width);
+        assert_eq!(curr_x, width);
+    }
+
+    ComputedCoverage {
+        width,
+        height,
+        sample_counts,
+        samples,
     }
 }
 
