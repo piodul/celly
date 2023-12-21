@@ -480,6 +480,9 @@ pub fn rasterize<'a, F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
 
     let mut coverage_for_fn: Vec<CoveringTriangleInfo> = Vec::new();
 
+    // const DUMP_X: usize = 765;
+    // const DUMP_Y: usize = 1026;
+
     for y in 0..height {
         let fy = y as Coord;
         scanline_events.clear();
@@ -491,9 +494,9 @@ pub fn rasterize<'a, F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
         let mut push_events =
             |tkind: TrapezoidKind, trapezoid: &'a Trapezoid, triangle_id: usize, lower_y: Coord| {
                 let start_time = if trapezoid.left_x[0] < trapezoid.left_x[1] {
-                    trapezoid.get_left_intersection_at_y(fy)
+                    trapezoid.get_left_intersection_at_y(fy) - 1.0
                 } else {
-                    trapezoid.get_left_intersection_at_y(lower_y)
+                    trapezoid.get_left_intersection_at_y(lower_y) - 1.0
                 };
                 let end_time = if trapezoid.right_x[0] > trapezoid.right_x[1] {
                     trapezoid.get_right_intersection_at_y(fy)
@@ -532,7 +535,7 @@ pub fn rasterize<'a, F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
             push_events(e.2, &e.0, e.1, fy + 1.0);
         }
 
-        let mut curr_x = 0;
+        let mut curr_x = 0usize;
         'scanline_events: while let Some(evt) = scanline_events.pop() {
             // Rasterize
             let bound_x = evt.time.0 .0;
@@ -561,6 +564,13 @@ pub fn rasterize<'a, F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
                             coverage_for_fn.push((*tri, coverage));
                         }
 
+                        // if curr_x == DUMP_X && y == DUMP_Y {
+                        //     dump_obj(
+                        //         coverage_info.iter().map(|x| x.2.clone()),
+                        //         (curr_x as Coord, fy),
+                        //     );
+                        // }
+
                         // Callback
                         f(curr_x as u32, y as u32, &coverage_for_fn);
                         curr_x += 1;
@@ -575,6 +585,13 @@ pub fn rasterize<'a, F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
             if coverage_for_fn.len() == 1 {
                 // Rasterize. No need to update coverage on each iteration.
                 while (curr_x as Coord) < bound_x {
+                    // if curr_x == DUMP_X && y == DUMP_Y {
+                    //     dump_obj(
+                    //         coverage_info.iter().map(|x| x.2.clone()),
+                    //         (curr_x as Coord, fy),
+                    //     );
+                    // }
+
                     // Callback
                     f(curr_x as u32, y as u32, &coverage_for_fn);
                     curr_x += 1;
@@ -609,4 +626,44 @@ pub fn rasterize<'a, F: FnMut(u32, u32, &[CoveringTriangleInfo])>(
         // covered the whole line
         assert!(curr_x == width);
     }
+}
+
+#[allow(dead_code)]
+fn dump_obj(trapezoids: impl Iterator<Item = Trapezoid>, origin: Point2D) {
+    println!("# OBJ start");
+
+    let mut tcount = 0;
+    for t in trapezoids {
+        tcount += 1;
+        println!(
+            "v {} {} {}",
+            t.left_x[0] - origin.0,
+            0.0,
+            t.upper_y - origin.1,
+        );
+        println!(
+            "v {} {} {}",
+            t.right_x[0] - origin.0,
+            0.0,
+            t.upper_y - origin.1,
+        );
+        println!(
+            "v {} {} {}",
+            t.right_x[1] - origin.0,
+            0.0,
+            t.lower_y - origin.1,
+        );
+        println!(
+            "v {} {} {}",
+            t.left_x[1] - origin.0,
+            0.0,
+            t.lower_y - origin.1,
+        );
+    }
+
+    for i in 0..tcount {
+        println!("f {} {} {} {}", 4 * i + 1, 4 * i + 2, 4 * i + 3, 4 * i + 4);
+    }
+
+    println!("# OBJ end");
 }
