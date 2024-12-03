@@ -21,10 +21,10 @@ use std::time::{Duration, Instant};
 use crate::halton::HaltonSequence;
 use crate::tree_2d::{Coord, Point2D};
 
+#[derive(Clone)]
 struct TriangleColorConfiguration {
     pub colors: [(f64, f64, f64); 3],
     pub weights: [f64; 3],
-    pub bary: BarycentricConverter,
 }
 
 fn convert_to_luma(color: &image::Rgb<u8>) -> Coord {
@@ -124,17 +124,18 @@ fn generate_delaunay_image(
     timer.measure("Preparing events");
 
     // Calculate barycentric converters and colors
-    let mut ccinfo = {
-        let mut ccinfo = Vec::with_capacity(triangulation.len());
-        for t in triangulation.iter() {
-            ccinfo.push(TriangleColorConfiguration {
-                colors: [(0.0, 0.0, 0.0); 3],
-                weights: [0.0; 3],
-                bary: BarycentricConverter::from_triangle(t),
-            });
-        }
-        ccinfo
-    };
+    let bary_converters = triangulation
+        .iter()
+        .map(BarycentricConverter::from_triangle)
+        .collect::<Vec<_>>();
+
+    let mut ccinfo = vec![
+        TriangleColorConfiguration {
+            colors: [(0.0, 0.0, 0.0); 3],
+            weights: [0.0; 3],
+        };
+        triangulation.len()
+    ];
 
     let computed = rasterization::rasterize(&events, im_width, im_height);
     timer.measure("Computing coverage info for rasterization");
@@ -144,8 +145,7 @@ fn generate_delaunay_image(
             for (tri_id, factor) in coverage.iter().cloned() {
                 let cc = &mut ccinfo[tri_id];
                 let point = img.get_pixel(x, y);
-                let (mut a, mut b, mut c) = cc
-                    .bary
+                let (mut a, mut b, mut c) = bary_converters[tri_id]
                     .convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
                 a *= factor;
                 b *= factor;
@@ -199,9 +199,8 @@ fn generate_delaunay_image(
             let mut color = [0.0; 3];
             for (id, factor) in coverage.iter().cloned() {
                 let cc = &ccinfo[id];
-                let (a, b, c) = cc
-                    .bary
-                    .convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
+                let (a, b, c) =
+                    bary_converters[id].convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
                 color[0] += (a * cc.colors[0].0 + b * cc.colors[1].0 + c * cc.colors[2].0) * factor;
                 color[1] += (a * cc.colors[0].1 + b * cc.colors[1].1 + c * cc.colors[2].1) * factor;
                 color[2] += (a * cc.colors[0].2 + b * cc.colors[1].2 + c * cc.colors[2].2) * factor;
