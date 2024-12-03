@@ -478,14 +478,10 @@ impl ComputedCoverage {
     pub fn replay(&self, mut f: impl FnMut(u32, u32, &[CoveringTriangleInfo])) {
         let mut y = 0;
         for chunk in self.chunks.iter() {
-            assert_eq!(self.rows_per_chunk * self.width, chunk.sample_counts.len());
+            let y_end = std::cmp::min(y + self.rows_per_chunk, self.height);
+            assert_eq!((y_end - y) * self.width, chunk.sample_counts.len());
 
-            chunk.replay(
-                y,
-                std::cmp::min(y + self.rows_per_chunk, self.height),
-                self.width,
-                &mut f,
-            );
+            chunk.replay(y, y_end, self.width, &mut f);
 
             y += self.rows_per_chunk;
         }
@@ -532,7 +528,7 @@ pub fn rasterize<'a>(
     let mut broom = Broom::new(events);
 
     // Split the image into horizontal stripes and process in parallel
-    const MIN_PIXEL_COUNT_PER_CHUNK: usize = 4096;
+    const MIN_PIXEL_COUNT_PER_CHUNK: usize = 16 * 4096;
     let rows_per_chunk = (MIN_PIXEL_COUNT_PER_CHUNK + width - 1) / width;
 
     let mut y = 0;

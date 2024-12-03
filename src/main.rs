@@ -130,40 +130,82 @@ fn generate_delaunay_image(
         .map(BarycentricConverter::from_triangle)
         .collect::<Vec<_>>();
 
-    let mut ccinfo: HashMap<usize, TriangleColorConfiguration> = HashMap::new();
-
     let computed = rasterization::rasterize(&events, im_width, im_height);
     timer.measure("Computing coverage info for rasterization");
 
-    {
-        computed.replay(|x: u32, y: u32, coverage: &[(usize, f64)]| {
-            for (tri_id, factor) in coverage.iter().cloned() {
-                let cc = &mut ccinfo.entry(tri_id).or_insert_with(Default::default);
-                let point = img.get_pixel(x, y);
-                let (mut a, mut b, mut c) = bary_converters[tri_id]
-                    .convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
-                a *= factor;
-                b *= factor;
-                c *= factor;
-                cc.colors[0].0 += a * point.channels()[0] as f64;
-                cc.colors[0].1 += a * point.channels()[1] as f64;
-                cc.colors[0].2 += a * point.channels()[2] as f64;
-                cc.colors[1].0 += b * point.channels()[0] as f64;
-                cc.colors[1].1 += b * point.channels()[1] as f64;
-                cc.colors[1].2 += b * point.channels()[2] as f64;
-                cc.colors[2].0 += c * point.channels()[0] as f64;
-                cc.colors[2].1 += c * point.channels()[1] as f64;
-                cc.colors[2].2 += c * point.channels()[2] as f64;
-                cc.weights[0] += a;
-                cc.weights[1] += b;
-                cc.weights[2] += c;
-            }
-        });
+    let mut ccinfo = {
+        let ccinfos = computed
+            .chunks()
+            .par_iter()
+            .enumerate()
+            .map(|(id, chunk)| {
+                let mut ccinfo: HashMap<usize, TriangleColorConfiguration> = HashMap::new();
+
+                let y_start = id * computed.rows_per_chunk();
+                let y_end =
+                    std::cmp::min(y_start + computed.rows_per_chunk(), img.height() as usize);
+                chunk.replay(
+                    y_start,
+                    y_end,
+                    img.width() as usize,
+                    |x: u32, y: u32, coverage: &[(usize, f64)]| {
+                        for (tri_id, factor) in coverage.iter().cloned() {
+                            let cc = &mut ccinfo.entry(tri_id).or_insert_with(Default::default);
+                            let point = img.get_pixel(x, y);
+                            let (mut a, mut b, mut c) = bary_converters[tri_id]
+                                .convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
+                            a *= factor;
+                            b *= factor;
+                            c *= factor;
+                            cc.colors[0].0 += a * point.channels()[0] as f64;
+                            cc.colors[0].1 += a * point.channels()[1] as f64;
+                            cc.colors[0].2 += a * point.channels()[2] as f64;
+                            cc.colors[1].0 += b * point.channels()[0] as f64;
+                            cc.colors[1].1 += b * point.channels()[1] as f64;
+                            cc.colors[1].2 += b * point.channels()[2] as f64;
+                            cc.colors[2].0 += c * point.channels()[0] as f64;
+                            cc.colors[2].1 += c * point.channels()[1] as f64;
+                            cc.colors[2].2 += c * point.channels()[2] as f64;
+                            cc.weights[0] += a;
+                            cc.weights[1] += b;
+                            cc.weights[2] += c;
+                        }
+                    },
+                );
+
+                ccinfo
+            })
+            .collect::<Vec<_>>();
+
         timer.measure("Computing triangle colors");
-    }
+
+        let mut target_ccinfo = vec![TriangleColorConfiguration::default(); triangulation.len()];
+
+        for ccinfo in ccinfos {
+            for (tri_id, ccinfo) in ccinfo {
+                let cc = &mut target_ccinfo[tri_id];
+                cc.colors[0].0 += ccinfo.colors[0].0;
+                cc.colors[0].1 += ccinfo.colors[0].1;
+                cc.colors[0].2 += ccinfo.colors[0].2;
+                cc.colors[1].0 += ccinfo.colors[1].0;
+                cc.colors[1].1 += ccinfo.colors[1].1;
+                cc.colors[1].2 += ccinfo.colors[1].2;
+                cc.colors[2].0 += ccinfo.colors[2].0;
+                cc.colors[2].1 += ccinfo.colors[2].1;
+                cc.colors[2].2 += ccinfo.colors[2].2;
+                cc.weights[0] += ccinfo.weights[0];
+                cc.weights[1] += ccinfo.weights[1];
+                cc.weights[2] += ccinfo.weights[2];
+            }
+        }
+
+        timer.measure("Gathering triangle colors");
+
+        target_ccinfo
+    };
 
     // Scale the colors
-    for cc in ccinfo.values_mut() {
+    for cc in ccinfo.iter_mut() {
         if cc.weights[0] != 0.0 {
             cc.colors[0].0 /= cc.weights[0];
             cc.colors[0].1 /= cc.weights[0];
@@ -181,8 +223,6 @@ fn generate_delaunay_image(
         }
     }
 
-    let dummy_configuration: TriangleColorConfiguration = TriangleColorConfiguration::default();
-
     let mut pixel_id = 0;
     computed.replay(|x: u32, y: u32, coverage: &[(usize, f64)]| {
         let pixel = {
@@ -195,7 +235,7 @@ fn generate_delaunay_image(
 
             let mut color = [0.0; 3];
             for (id, factor) in coverage.iter().cloned() {
-                let cc = &ccinfo.get(&id).unwrap_or(&dummy_configuration);
+                let cc = &ccinfo[id];
                 let (a, b, c) =
                     bary_converters[id].convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
                 color[0] += (a * cc.colors[0].0 + b * cc.colors[1].0 + c * cc.colors[2].0) * factor;
