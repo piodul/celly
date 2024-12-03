@@ -10,7 +10,7 @@ mod tree_2d;
 
 use crate::common_geometry::{BarycentricConverter, Triangle2D};
 use crate::float_ord::FloatOrd;
-use image::Pixel;
+use image::{Pixel, RgbImage};
 use rayon::prelude::*;
 use std::cmp;
 use std::collections::HashMap;
@@ -115,9 +115,9 @@ fn compute_differential_image(img: &image::RgbImage) -> Vec<Coord> {
 
 fn generate_delaunay_image(
     timer: &mut Timer,
-    img: &mut image::RgbImage,
+    img: image::RgbImage,
     triangulation: &Vec<Triangle2D>,
-) {
+) -> image::RgbImage {
     let im_width = img.width() as usize;
     let im_height = img.height() as usize;
 
@@ -223,38 +223,62 @@ fn generate_delaunay_image(
         }
     }
 
-    let mut pixel_id = 0;
-    computed.replay(|x: u32, y: u32, coverage: &[(usize, f64)]| {
-        let pixel = {
-            // let csum = coverage.iter().map(|(_, c)| *c).sum::<f64>();
-            // if csum < 0.99 || csum > 1.01 {
-            //     img.put_pixel(x, y, image::Rgb([255, 0, 0]));
-            //     pixel_id += 1;
-            //     return;
-            // }
+    let img_width = img.width() as usize;
+    let img_height = img.height() as usize;
+    let mut img_buffer = img.into_vec();
 
-            let mut color = [0.0; 3];
-            for (id, factor) in coverage.iter().cloned() {
-                let cc = &ccinfo[id];
-                let (a, b, c) =
-                    bary_converters[id].convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
-                color[0] += (a * cc.colors[0].0 + b * cc.colors[1].0 + c * cc.colors[2].0) * factor;
-                color[1] += (a * cc.colors[0].1 + b * cc.colors[1].1 + c * cc.colors[2].1) * factor;
-                color[2] += (a * cc.colors[0].2 + b * cc.colors[1].2 + c * cc.colors[2].2) * factor;
-            }
-            // The factors/weights are assumed to sum up to 1.0
-            image::Rgb([color[0] as u8, color[1] as u8, color[2] as u8])
-        };
-        // let pixel = if coverage.len() == 1 {
-        //     image::Rgb([0, 255, 0])
-        // } else {
-        //     image::Rgb([255, 0, 0])
-        // };
-        // let pixel = image::Rgb([(10 * coverage.len()) as u8, 0, 0]);
-        img.put_pixel(x, y, pixel);
-        pixel_id += 1;
-    });
+    computed
+        .chunks()
+        .iter()
+        .zip(img_buffer.chunks_mut(3 * img_width * computed.rows_per_chunk()))
+        .enumerate()
+        .par_bridge()
+        .for_each(|(id, (chunk, img_chunk))| {
+            let y_start = id * computed.rows_per_chunk();
+            let y_end = std::cmp::min(y_start + computed.rows_per_chunk(), img_height);
+            let mut pixel_id = 0;
+            chunk.replay(
+                y_start,
+                y_end,
+                img_width,
+                |x: u32, y: u32, coverage: &[(usize, f64)]| {
+                    // let csum = coverage.iter().map(|(_, c)| *c).sum::<f64>();
+                    // if csum < 0.99 || csum > 1.01 {
+                    //     img.put_pixel(x, y, image::Rgb([255, 0, 0]));
+                    //     pixel_id += 1;
+                    //     return;
+                    // }
+
+                    let mut color = [0.0; 3];
+                    for (id, factor) in coverage.iter().cloned() {
+                        let cc = &ccinfo[id];
+                        let (a, b, c) = bary_converters[id]
+                            .convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
+                        color[0] +=
+                            (a * cc.colors[0].0 + b * cc.colors[1].0 + c * cc.colors[2].0) * factor;
+                        color[1] +=
+                            (a * cc.colors[0].1 + b * cc.colors[1].1 + c * cc.colors[2].1) * factor;
+                        color[2] +=
+                            (a * cc.colors[0].2 + b * cc.colors[1].2 + c * cc.colors[2].2) * factor;
+                    }
+                    // The factors/weights are assumed to sum up to 1.0
+                    img_chunk[3 * pixel_id + 0] = color[0] as u8;
+                    img_chunk[3 * pixel_id + 1] = color[1] as u8;
+                    img_chunk[3 * pixel_id + 2] = color[2] as u8;
+                    pixel_id += 1;
+                    // let pixel = if coverage.len() == 1 {
+                    //     image::Rgb([0, 255, 0])
+                    // } else {
+                    //     image::Rgb([255, 0, 0])
+                    // };
+                    // let pixel = image::Rgb([(10 * coverage.len()) as u8, 0, 0]);
+                },
+            );
+        });
+
     timer.measure("Generating image");
+
+    RgbImage::from_raw(img_width as u32, img_height as u32, img_buffer).unwrap()
 }
 
 fn duration_as_seconds(d: Duration) -> f64 {
@@ -292,7 +316,7 @@ fn main() {
         .unwrap();
 
     let mut timer = Timer::new();
-    let mut img = image::open(Path::new(&path)).unwrap().to_rgb8();
+    let img = image::open(Path::new(&path)).unwrap().to_rgb8();
     let point_count = ((img.width() * img.height()) / fineness) as usize;
 
     println!("Point count: {}", point_count);
@@ -311,7 +335,7 @@ fn main() {
     );
     timer.measure("Calculating delaunay triangulation");
 
-    generate_delaunay_image(&mut timer, &mut img, &tris);
+    let img = generate_delaunay_image(&mut timer, img, &tris);
 
     let new_path = String::from(path.to_string_lossy()) + ".cellied.png";
     img.save(OsString::from(new_path)).unwrap();
