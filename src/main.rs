@@ -13,6 +13,7 @@ use crate::float_ord::FloatOrd;
 use image::Pixel;
 use rayon::prelude::*;
 use std::cmp;
+use std::collections::HashMap;
 use std::env::args_os;
 use std::ffi::OsString;
 use std::path::Path;
@@ -21,7 +22,7 @@ use std::time::{Duration, Instant};
 use crate::halton::HaltonSequence;
 use crate::tree_2d::{Coord, Point2D};
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct TriangleColorConfiguration {
     pub colors: [(f64, f64, f64); 3],
     pub weights: [f64; 3],
@@ -129,13 +130,7 @@ fn generate_delaunay_image(
         .map(BarycentricConverter::from_triangle)
         .collect::<Vec<_>>();
 
-    let mut ccinfo = vec![
-        TriangleColorConfiguration {
-            colors: [(0.0, 0.0, 0.0); 3],
-            weights: [0.0; 3],
-        };
-        triangulation.len()
-    ];
+    let mut ccinfo: HashMap<usize, TriangleColorConfiguration> = HashMap::new();
 
     let computed = rasterization::rasterize(&events, im_width, im_height);
     timer.measure("Computing coverage info for rasterization");
@@ -143,7 +138,7 @@ fn generate_delaunay_image(
     {
         computed.replay(|x: u32, y: u32, coverage: &[(usize, f64)]| {
             for (tri_id, factor) in coverage.iter().cloned() {
-                let cc = &mut ccinfo[tri_id];
+                let cc = &mut ccinfo.entry(tri_id).or_insert_with(Default::default);
                 let point = img.get_pixel(x, y);
                 let (mut a, mut b, mut c) = bary_converters[tri_id]
                     .convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
@@ -168,7 +163,7 @@ fn generate_delaunay_image(
     }
 
     // Scale the colors
-    for cc in ccinfo.iter_mut() {
+    for cc in ccinfo.values_mut() {
         if cc.weights[0] != 0.0 {
             cc.colors[0].0 /= cc.weights[0];
             cc.colors[0].1 /= cc.weights[0];
@@ -186,6 +181,8 @@ fn generate_delaunay_image(
         }
     }
 
+    let dummy_configuration: TriangleColorConfiguration = TriangleColorConfiguration::default();
+
     let mut pixel_id = 0;
     computed.replay(|x: u32, y: u32, coverage: &[(usize, f64)]| {
         let pixel = {
@@ -198,7 +195,7 @@ fn generate_delaunay_image(
 
             let mut color = [0.0; 3];
             for (id, factor) in coverage.iter().cloned() {
-                let cc = &ccinfo[id];
+                let cc = &ccinfo.get(&id).unwrap_or(&dummy_configuration);
                 let (a, b, c) =
                     bary_converters[id].convert_to_barycentric((x as f64 + 0.5, y as f64 + 0.5));
                 color[0] += (a * cc.colors[0].0 + b * cc.colors[1].0 + c * cc.colors[2].0) * factor;
