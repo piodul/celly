@@ -462,7 +462,10 @@ struct ScanlineEvent<'a> {
 
 pub type CoveringTriangleInfo = (usize, f64);
 
-type CoverageChunk = (Vec<usize>, Vec<CoveringTriangleInfo>);
+pub struct CoverageChunk {
+    sample_counts: Vec<usize>,
+    samples: Vec<CoveringTriangleInfo>,
+}
 
 pub struct ComputedCoverage {
     width: usize,
@@ -474,24 +477,50 @@ pub struct ComputedCoverage {
 impl ComputedCoverage {
     pub fn replay(&self, mut f: impl FnMut(u32, u32, &[CoveringTriangleInfo])) {
         let mut y = 0;
-        for (sample_counts, samples) in self.chunks.iter() {
-            assert_eq!(self.rows_per_chunk * self.width, sample_counts.len());
+        for chunk in self.chunks.iter() {
+            assert_eq!(self.rows_per_chunk * self.width, chunk.sample_counts.len());
 
-            let row_count = std::cmp::min(self.height - y, self.rows_per_chunk);
+            chunk.replay(
+                y,
+                std::cmp::min(y + self.rows_per_chunk, self.height),
+                self.width,
+                &mut f,
+            );
 
-            let mut curr_samples = samples.as_slice();
-            for row in 0..row_count {
-                for x in 0..self.width {
-                    let scount = sample_counts[row * self.width + x];
-                    let (head_samples, tail_samples) = curr_samples.split_at(scount);
-                    f(x as u32, y as u32, head_samples);
-                    curr_samples = tail_samples;
-                }
-                y += 1;
-            }
-
-            assert_eq!(curr_samples.len(), 0);
+            y += self.rows_per_chunk;
         }
+    }
+
+    pub fn rows_per_chunk(&self) -> usize {
+        self.rows_per_chunk
+    }
+
+    pub fn chunks(&self) -> &[CoverageChunk] {
+        self.chunks.as_slice()
+    }
+}
+
+impl CoverageChunk {
+    pub fn replay(
+        &self,
+        y_start: usize,
+        y_end: usize,
+        width: usize,
+        mut f: impl FnMut(u32, u32, &[CoveringTriangleInfo]),
+    ) {
+        let mut y = y_start;
+        let mut curr_samples = self.samples.as_slice();
+        for row in 0..y_end - y_start {
+            for x in 0..width {
+                let scount = self.sample_counts[row * width + x];
+                let (head_samples, tail_samples) = curr_samples.split_at(scount);
+                f(x as u32, y as u32, head_samples);
+                curr_samples = tail_samples;
+            }
+            y += 1;
+        }
+
+        assert_eq!(curr_samples.len(), 0);
     }
 }
 
@@ -672,7 +701,10 @@ fn rasterize_scanlines<'a>(
         assert_eq!(curr_x, width);
     }
 
-    (sample_counts, samples)
+    CoverageChunk {
+        sample_counts,
+        samples,
+    }
 }
 
 #[allow(dead_code)]
