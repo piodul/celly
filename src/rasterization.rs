@@ -462,21 +462,25 @@ struct ScanlineEvent<'a> {
 
 pub type CoveringTriangleInfo = (usize, f64);
 
-type CoverageChunk = (usize, Vec<usize>, Vec<CoveringTriangleInfo>);
+type CoverageChunk = (Vec<usize>, Vec<CoveringTriangleInfo>);
 
 pub struct ComputedCoverage {
     width: usize,
+    height: usize,
+    rows_per_chunk: usize,
     chunks: Vec<CoverageChunk>,
 }
 
 impl ComputedCoverage {
     pub fn replay(&self, mut f: impl FnMut(u32, u32, &[CoveringTriangleInfo])) {
         let mut y = 0;
-        for (row_count, sample_counts, samples) in self.chunks.iter() {
-            assert_eq!(row_count * self.width, sample_counts.len());
+        for (sample_counts, samples) in self.chunks.iter() {
+            assert_eq!(self.rows_per_chunk * self.width, sample_counts.len());
+
+            let row_count = std::cmp::min(self.height - y, self.rows_per_chunk);
 
             let mut curr_samples = samples.as_slice();
-            for row in 0..*row_count {
+            for row in 0..row_count {
                 for x in 0..self.width {
                     let scount = sample_counts[row * self.width + x];
                     let (head_samples, tail_samples) = curr_samples.split_at(scount);
@@ -500,7 +504,7 @@ pub fn rasterize<'a>(
 
     // Split the image into horizontal stripes and process in parallel
     const MIN_PIXEL_COUNT_PER_CHUNK: usize = 4096;
-    let rows_per_stripe = (MIN_PIXEL_COUNT_PER_CHUNK + width - 1) / width;
+    let rows_per_chunk = (MIN_PIXEL_COUNT_PER_CHUNK + width - 1) / width;
 
     let mut y = 0;
     let work_items = std::iter::from_fn(|| {
@@ -509,7 +513,7 @@ pub fn rasterize<'a>(
         }
 
         let start_y = y;
-        y += rows_per_stripe;
+        y += rows_per_chunk;
         let end_y = std::cmp::min(y, height);
 
         broom.advance_to(start_y as Coord);
@@ -522,7 +526,12 @@ pub fn rasterize<'a>(
         .map(|(mut b, start_y, end_y)| rasterize_scanlines(&mut b, width, start_y, end_y - start_y))
         .collect();
 
-    ComputedCoverage { width, chunks }
+    ComputedCoverage {
+        width,
+        height,
+        rows_per_chunk,
+        chunks,
+    }
 }
 
 fn rasterize_scanlines<'a>(
@@ -663,7 +672,7 @@ fn rasterize_scanlines<'a>(
         assert_eq!(curr_x, width);
     }
 
-    (height, sample_counts, samples)
+    (sample_counts, samples)
 }
 
 #[allow(dead_code)]
