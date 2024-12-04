@@ -2,9 +2,7 @@ use rayon::prelude::*;
 use std::cmp::{self, Ord, Ordering, PartialOrd};
 use std::collections::BTreeSet;
 
-use arrayvec::ArrayVec;
-
-use crate::common_geometry::{det2, Coord, Point2D, Triangle2D};
+use crate::common_geometry::{Coord, Point2D, Triangle2D};
 use crate::float_ord::FloatOrd;
 
 fn get_intersection_at_y(upper: Point2D, lower: Point2D, y: Coord) -> Coord {
@@ -16,78 +14,6 @@ fn get_intersection_at_y(upper: Point2D, lower: Point2D, y: Coord) -> Coord {
 //     // Dirty trick, I can't think too deeply right now
 //     get_intersection_at_y((upper.1, upper.0), (lower.1, lower.0), x)
 // }
-
-fn calculate_clipped_area(trapezoid: &Trapezoid, origin: Point2D) -> f64 {
-    // Normalize to the rect upper left corner
-    let mut v1: ArrayVec<Point2D, 16> = ArrayVec::new();
-    let mut v2: ArrayVec<Point2D, 16> = ArrayVec::new();
-
-    v1.push((trapezoid.left_x[1] - origin.0, trapezoid.lower_y - origin.1));
-    v1.push((
-        trapezoid.right_x[1] - origin.0,
-        trapezoid.lower_y - origin.1,
-    ));
-    v1.push((
-        trapezoid.right_x[0] - origin.0,
-        trapezoid.upper_y - origin.1,
-    ));
-    v1.push((trapezoid.left_x[0] - origin.0, trapezoid.upper_y - origin.1));
-
-    let mut verts = &mut v1;
-    let mut new_verts = &mut v2;
-
-    for _ in 0..4 {
-        // Clip da edges
-        let mut prev_vert = match verts.last().cloned() {
-            Some(v) => v,
-            None => return 0.0, // Completely clipped
-        };
-        for curr_vert in verts.iter() {
-            let prev_clipped = prev_vert.1 < 0.0;
-            let curr_clipped = curr_vert.1 < 0.0;
-            match (prev_clipped, curr_clipped) {
-                (true, true) => {
-                    // Do nothing, the whole edge is clipped
-                }
-                (true, false) => {
-                    let x = get_intersection_at_y(*curr_vert, prev_vert, 0.0);
-                    new_verts.push((x, 0.0));
-                    new_verts.push(*curr_vert);
-                }
-                (false, true) => {
-                    let x = get_intersection_at_y(*curr_vert, prev_vert, 0.0);
-                    new_verts.push((x, 0.0));
-                }
-                _ => {
-                    new_verts.push(*curr_vert);
-                }
-            }
-
-            prev_vert = *curr_vert;
-        }
-
-        // Rotate by 90 degrees
-        for v in new_verts.iter_mut() {
-            *v = (1.0 - v.1, v.0);
-        }
-
-        std::mem::swap(&mut verts, &mut new_verts);
-        new_verts.clear();
-    }
-
-    // Finally, calculate the area
-    let mut area = 0.0;
-    let mut prev_vert = match verts.last().cloned() {
-        Some(v) => v,
-        None => return 0.0,
-    };
-    for curr_vert in verts.iter() {
-        area += det2(curr_vert.0, curr_vert.1, prev_vert.0, prev_vert.1);
-        prev_vert = *curr_vert;
-    }
-    // println!("area: {}", area * 0.5);
-    area * 0.5
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum RasterizationEventType {
@@ -126,136 +52,89 @@ impl Trapezoid {
         debug_assert!(self.left_x[1] <= self.right_x[1]);
     }
 
-    // // Perhaps it should be more efficient than the clipping method,
-    // // but it does not account for some special cases right now,
-    // // so I'm using a real clipping algorithm for the time being.
-    // fn calculate_area_clipped_to_unit_square(&self, origin: Point2D) -> f64 {
-    //     let mut ret = self.clone();
-    //     ret.upper_y -= origin.1;
-    //     ret.lower_y -= origin.1;
-    //     if ret.lower_y >= 1.0 || ret.upper_y <= 0.0 {
-    //         // No intersection, the trapezoid is either above or below
-    //         // the unit square
-    //         return 0.0;
-    //     }
+    fn calculate_area_clipped_to_unit_square(&self, origin: Point2D) -> f64 {
+        let mut ret = self.clone();
+        ret.upper_y -= origin.1;
+        ret.lower_y -= origin.1;
+        if ret.lower_y <= 0.0 || ret.upper_y >= 1.0 {
+            // No intersection, the trapezoid is either above or below
+            // the unit square
+            return 0.0;
+        }
 
-    //     ret.left_x[0] -= origin.0;
-    //     ret.left_x[1] -= origin.0;
-    //     ret.right_x[0] -= origin.0;
-    //     ret.right_x[1] -= origin.0;
+        ret.left_x[0] -= origin.0;
+        ret.left_x[1] -= origin.0;
+        ret.right_x[0] -= origin.0;
+        ret.right_x[1] -= origin.0;
 
-    //     // Shave off the parts above y = 0.0 and below y = 1.0
-    //     if ret.upper_y < 0.0 {
-    //         ret.left_x[0] = ret.get_left_intersection_at_y(0.0);
-    //         ret.right_x[0] = ret.get_right_intersection_at_y(0.0);
-    //         ret.upper_y = 0.0;
-    //     }
-    //     if ret.lower_y > 1.0 {
-    //         ret.left_x[1] = ret.get_left_intersection_at_y(1.0);
-    //         ret.right_x[1] = ret.get_right_intersection_at_y(1.0);
-    //         ret.lower_y = 1.0;
-    //     }
+        // Shave off the parts above y = 0.0 and below y = 1.0
+        if ret.upper_y < 0.0 {
+            ret.left_x[0] = ret.get_left_intersection_at_y(0.0);
+            ret.right_x[0] = ret.get_right_intersection_at_y(0.0);
+            ret.upper_y = 0.0;
+        }
+        if ret.lower_y > 1.0 {
+            ret.left_x[1] = ret.get_left_intersection_at_y(1.0);
+            ret.right_x[1] = ret.get_right_intersection_at_y(1.0);
+            ret.lower_y = 1.0;
+        }
 
-    //     let compute_area_to_the_right = |x: Coord| -> f64 {
-    //         println!(" compute_area_to_the_right: begin {x}");
+        let calculate_right_angled_trapezoid_clipped_to_unit_square =
+            |mut lower_x: Coord, mut upper_x: Coord, lower_y: Coord, upper_y: Coord| -> f64 {
+                // Consider a right-angled trapezoid with corners in (0, 0) and (0, 1).
+                // `lower_x` and `upper_x` define the x-coordinates of the two right corners.
+                // This function calculates the area of such a trapezoid.
+                if lower_x > upper_x {
+                    // Should give the same result, but will allow us
+                    // to simplify code
+                    std::mem::swap(&mut lower_x, &mut upper_x);
+                }
 
-    //         let mut a = 0.0;
+                // Moment of intersection of the right edge with x == 0
+                let m_0 = match (lower_x > 0.0, upper_x > 0.0) {
+                    (true, true) => upper_y,
+                    (false, false) => lower_y,
+                    (false, true) => {
+                        // Abuse, but whatever
+                        get_intersection_at_y((lower_y, upper_x), (upper_y, lower_x), 0.0)
+                    }
+                    _ => unreachable!(), // because v_lower <= v_upper
+                };
 
-    //         // Right "wing"
-    //         match (ret.right_x[0] <= x, ret.right_x[1] <= x) {
-    //             (true, true) => {
-    //                 // Everything is to the left
-    //                 println!("  right: everything to the left - return");
-    //                 return a;
-    //             }
-    //             (true, false) => {
-    //                 let midpt = get_intersection_at_x(
-    //                     (ret.right_x[0], ret.upper_y),
-    //                     (ret.right_x[1], ret.lower_y),
-    //                     x,
-    //                 );
-    //                 a += 0.5 * (1.0 - midpt) * (ret.right_x[1] - x);
-    //                 println!("  right: true, false, increase by {}", a);
-    //                 return a;
-    //             }
-    //             (false, true) => {
-    //                 let midpt = get_intersection_at_x(
-    //                     (ret.right_x[0], ret.upper_y),
-    //                     (ret.right_x[1], ret.lower_y),
-    //                     x,
-    //                 );
-    //                 a += 0.5 * midpt * (ret.right_x[0] - x);
-    //                 println!("  right: false, true, increase by {}", a);
-    //                 return a;
-    //             }
-    //             (false, false) => {
-    //                 a += 0.5 * (ret.right_x[1] - ret.right_x[0]).abs(); // * 1.0 (height)
-    //                 println!("  right: false, false, increase by {}", a);
-    //             }
-    //         }
+                // Moment of intersection of the right edge with x == 1
+                let m_1 = match (lower_x > 1.0, upper_x > 1.0) {
+                    (true, true) => upper_y,
+                    (false, false) => lower_y,
+                    (false, true) => {
+                        // Abuse, but whatever
+                        get_intersection_at_y((lower_y, upper_x), (upper_y, lower_x), 1.0)
+                    }
+                    _ => unreachable!(), // because v_lower <= v_upper
+                };
 
-    //         // The rectangle part
-    //         let rect_left = std::cmp::max(FloatOrd(ret.left_x[0]), FloatOrd(ret.left_x[1])).0;
-    //         let rect_right = std::cmp::min(FloatOrd(ret.right_x[0]), FloatOrd(ret.right_x[1])).0;
-    //         if rect_left <= x {
-    //             println!("  center: rectangle intersects, area {}", rect_right - x);
-    //             a += rect_right - x; // * 1.0 (height)
-    //             return a;
-    //         }
-    //         println!(
-    //             "  center: rectangle does not intersect, area {}",
-    //             rect_right - rect_left
-    //         );
-    //         a += rect_right - rect_left;
+                let b_0 = lower_x.clamp(0.0, 1.0);
+                let b_1 = upper_x.clamp(0.0, 1.0);
 
-    //         // Left "wing"
-    //         match (ret.left_x[0] <= x, ret.left_x[1] <= x) {
-    //             (true, true) => {
-    //                 // Everything is to the left (not very likely but can happen)
-    //                 println!("  left: everything to the left - return");
-    //                 return a;
-    //             }
-    //             (true, false) => {
-    //                 let midpt = get_intersection_at_x(
-    //                     (ret.left_x[0], ret.upper_y),
-    //                     (ret.left_x[1], ret.lower_y),
-    //                     x,
-    //                 );
-    //                 let incr = (ret.left_x[1] - x) - 0.5 * (ret.left_x[1] - x) * (1.0 - midpt);
-    //                 a += incr;
-    //                 println!("  left: true, false, increase by {}", incr);
-    //                 return a;
-    //             }
-    //             (false, true) => {
-    //                 let midpt = get_intersection_at_x(
-    //                     (ret.left_x[0], ret.upper_y),
-    //                     (ret.left_x[1], ret.lower_y),
-    //                     x,
-    //                 );
-    //                 let incr = (ret.left_x[0] - x) - 0.5 * (ret.left_x[0] - x) * midpt;
-    //                 a += incr;
-    //                 println!("  left: false, true, increase by {}", incr);
-    //                 return a;
-    //             }
-    //             (false, false) => {
-    //                 let incr = 0.5 * (ret.left_x[1] - ret.left_x[0]).abs(); // * 1.0 (height)
-    //                 a += incr;
-    //                 println!("  left: false, false, increase by {}", incr);
-    //             }
-    //         }
+                // TODO: Perhaps can be further simplified
+                let area = 0.5 * (b_1 + b_0) * (m_1 - m_0) + (lower_y - m_1);
 
-    //         a
-    //     };
+                area
+            };
 
-    //     let trap = &ret;
+        let area = calculate_right_angled_trapezoid_clipped_to_unit_square(
+            ret.right_x[0],
+            ret.right_x[1],
+            ret.lower_y,
+            ret.upper_y,
+        ) - calculate_right_angled_trapezoid_clipped_to_unit_square(
+            ret.left_x[0],
+            ret.left_x[1],
+            ret.lower_y,
+            ret.upper_y,
+        );
 
-    //     println!("starting computation");
-    //     let ret = compute_area_to_the_right(0.0) - compute_area_to_the_right(1.0);
-    //     if ret < 0.0 || ret > 1.0 {
-    //         panic!("{ret}, {:?}", trap);
-    //     }
-    //     ret
-    // }
+        area
+    }
 }
 
 impl Eq for Trapezoid {}
@@ -659,7 +538,8 @@ fn rasterize_scanlines<'a>(
                     while curr_x < bound_ux {
                         // Update coverage
                         for (tri, _, trapezoid) in coverage_info.iter() {
-                            let coverage = calculate_clipped_area(trapezoid, (curr_x as Coord, fy));
+                            let coverage = trapezoid
+                                .calculate_area_clipped_to_unit_square((curr_x as Coord, fy));
                             samples.push((*tri, coverage));
                         }
 
